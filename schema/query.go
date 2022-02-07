@@ -34,9 +34,7 @@ SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schema'
 	return count == 1, nil
 }
 
-// Create the schema table.
-func createSchemaTable(ctx context.Context, tx *sql.Tx) error {
-	statement := `
+const schemaTable = `
 CREATE TABLE schema (
     id         INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
     version    INTEGER NOT NULL,
@@ -44,7 +42,10 @@ CREATE TABLE schema (
     UNIQUE (version)
 )
 `
-	_, err := tx.ExecContext(ctx, statement)
+
+// Create the schema table.
+func createSchemaTable(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, schemaTable)
 	return errors.Trace(err)
 }
 

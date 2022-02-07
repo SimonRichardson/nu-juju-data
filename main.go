@@ -70,18 +70,18 @@ func doItLive() {
 
 			state := db.NewState(dqliteDB)
 
-			schema := schema.New(patches)
-			schema.Hook(func(ctx context.Context, tx *sql.Tx, current int) error {
+			sch := schema.New(patches)
+			sch.Hook(func(ctx context.Context, tx *sql.Tx, current int) error {
 				fmt.Println("Applying:", current)
 				return nil
 			})
-			changeSet, err := schema.Ensure(state)
+			changeSet, err := sch.Ensure(state)
 			if err != nil {
 				return err
 			}
 			fmt.Println("ChangeSet:", changeSet)
 
-			fmt.Println(schema.Applied(state))
+			fmt.Println(schema.Dump(state, sch))
 
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, unix.SIGPWR)

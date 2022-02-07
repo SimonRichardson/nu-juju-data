@@ -116,18 +116,26 @@ func (s *Schema) Ensure(st State) (ChangeSet, error) {
 // Applied returns the SQL commands that has been applied to the database. The
 // applied text returns a flattened list SQL statements that can be used as a
 // fresh install if required.
-func (s *Schema) Applied(st State) (string, error) {
-	var statements []string
-	err := st.Run(func(ctx context.Context, tx *sql.Tx) error {
+func (s *Schema) Applied(state State) (string, error) {
+	var applied []string
+	err := state.Run(func(ctx context.Context, tx *sql.Tx) error {
 		var err error
-		if err = checkAllPatchesAreApplied(ctx, tx, s.patches); err != nil {
-			return errors.Trace(err)
-		}
-		statements, err = selectTablesSQL(ctx, tx)
+		applied, err = s.applied(ctx, tx)
 		return errors.Trace(err)
 	})
 	if err != nil {
 		return "", errors.Trace(err)
+	}
+	return strings.Join(applied, ";\n"), nil
+}
+
+func (s *Schema) applied(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	if err := checkAllPatchesAreApplied(ctx, tx, s.patches); err != nil {
+		return nil, errors.Trace(err)
+	}
+	statements, err := selectTablesSQL(ctx, tx)
+	if err != nil {
+		return nil, errors.Trace(err)
 	}
 
 	// Add a statement for inserting the current schema version row.
@@ -137,7 +145,7 @@ func (s *Schema) Applied(st State) (string, error) {
 INSERT INTO schema (version, updated_at) VALUES (%d, strftime("%%s"))
 `, len(s.patches)))
 
-	return strings.Join(statements, ";\n"), nil
+	return statements, nil
 }
 
 // omitHook always returns a nil, omitting the error.
