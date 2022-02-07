@@ -15,3 +15,4 @@
 # vendor/
 _deps/
 bin/
+example*/
