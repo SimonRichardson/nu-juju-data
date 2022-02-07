@@ -3,6 +3,8 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"github.com/juju/errors"
 )
@@ -25,7 +27,7 @@ type Schema struct {
 type Patch func(context.Context, *sql.Tx) error
 
 // Hook is a callback that gets fired when a update gets applied.
-type Hook func(int, context.Context, *sql.Tx) error
+type Hook func(context.Context, *sql.Tx, int) error
 
 // New creates a new schema Schema with the given patches.
 func New(patches []Patch) *Schema {
@@ -44,6 +46,15 @@ func Empty() *Schema {
 // existing series.
 func (s *Schema) Add(update Patch) {
 	s.patches = append(s.patches, update)
+}
+
+// Hook instructs the schema to invoke the given function whenever a update is
+// about to be applied. The function gets passed the update version number and
+// the running transaction, and if it returns an error it will cause the schema
+// transaction to be rolled back. Any previously installed hook will be
+// replaced.
+func (s *Schema) Hook(hook Hook) {
+	s.hook = hook
 }
 
 // Len returns the number of total patches in the schema.
@@ -102,5 +113,32 @@ func (s *Schema) Ensure(st State) (ChangeSet, error) {
 	}, errors.Trace(err)
 }
 
+// Applied returns the SQL commands that has been applied to the database. The
+// applied text returns a flattened list SQL statements that can be used as a
+// fresh install if required.
+func (s *Schema) Applied(st State) (string, error) {
+	var statements []string
+	err := st.Run(func(ctx context.Context, tx *sql.Tx) error {
+		var err error
+		if err = checkAllPatchesAreApplied(ctx, tx, s.patches); err != nil {
+			return errors.Trace(err)
+		}
+		statements, err = selectTablesSQL(ctx, tx)
+		return errors.Trace(err)
+	})
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+
+	// Add a statement for inserting the current schema version row.
+	statements = append(
+		statements,
+		fmt.Sprintf(`
+INSERT INTO schema (version, updated_at) VALUES (%d, strftime("%%s"))
+`, len(s.patches)))
+
+	return strings.Join(statements, ";\n"), nil
+}
+
 // omitHook always returns a nil, omitting the error.
-func omitHook(int, context.Context, *sql.Tx) error { return nil }
+func omitHook(context.Context, *sql.Tx, int) error { return nil }

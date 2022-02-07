@@ -71,11 +71,17 @@ func doItLive() {
 			state := db.NewState(dqliteDB)
 
 			schema := schema.New(patches)
+			schema.Hook(func(ctx context.Context, tx *sql.Tx, current int) error {
+				fmt.Println("Applying:", current)
+				return nil
+			})
 			changeSet, err := schema.Ensure(state)
 			if err != nil {
 				return err
 			}
-			fmt.Println("changeset:", changeSet)
+			fmt.Println("ChangeSet:", changeSet)
+
+			fmt.Println(schema.Applied(state))
 
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, unix.SIGPWR)
@@ -169,7 +175,7 @@ CREATE TABLE IF NOT EXISTS operations (
 CREATE TABLE IF NOT EXISTS operations_results (
 	operation_id INTEGER PRIMARY KEY,
 	fail TEXT,
-	FOREIGN KEY (operation_id)	REFERENCES operations (id)
+	FOREIGN KEY (operation_id) REFERENCES operations (id)
 );
 		`,
 	)

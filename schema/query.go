@@ -15,7 +15,7 @@ SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schema'
 `
 	rows, err := tx.QueryContext(ctx, statement)
 	if err != nil {
-		return false, err
+		return false, errors.Trace(err)
 	}
 	defer rows.Close()
 
@@ -25,7 +25,10 @@ SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schema'
 
 	var count int
 	if err := rows.Scan(&count); err != nil {
-		return false, err
+		return false, errors.Trace(err)
+	}
+	if err := rows.Err(); err != nil {
+		return false, errors.Trace(err)
 	}
 
 	return count == 1, nil
@@ -42,7 +45,7 @@ CREATE TABLE schema (
 )
 `
 	_, err := tx.ExecContext(ctx, statement)
-	return err
+	return errors.Trace(err)
 }
 
 // Return the highest patch version currently applied. Zero means that no
@@ -57,7 +60,7 @@ func queryCurrentVersion(ctx context.Context, tx *sql.Tx) (int, error) {
 	if len(versions) > 0 {
 		err = checkSchemaVersionsHaveNoHoles(versions)
 		if err != nil {
-			return -1, err
+			return -1, errors.Trace(err)
 		}
 		// Highest recorded version
 		current = versions[len(versions)-1]
@@ -77,7 +80,7 @@ SELECT version FROM schema ORDER BY version
 	}
 	defer rows.Close()
 
-	values := []int{}
+	var values []int
 	for rows.Next() {
 		var value int
 		err := rows.Scan(&value)
@@ -87,8 +90,7 @@ SELECT version FROM schema ORDER BY version
 		values = append(values, value)
 	}
 
-	err = rows.Err()
-	if err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, errors.Trace(err)
 	}
 	return values, nil
@@ -106,6 +108,29 @@ func checkSchemaVersionsHaveNoHoles(versions []int) error {
 	return nil
 }
 
+// Check that all the given patches are applied.
+func checkAllPatchesAreApplied(ctx context.Context, tx *sql.Tx, patches []Patch) error {
+	versions, err := selectSchemaVersions(ctx, tx)
+	if err != nil {
+		return errors.Errorf("failed to fetch patch versions: %v", err)
+	}
+
+	if len(versions) == 0 {
+		return errors.Errorf("expected schema table to contain at least one row")
+	}
+
+	err = checkSchemaVersionsHaveNoHoles(versions)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	current := versions[len(versions)-1]
+	if current != len(patches) {
+		return errors.Errorf("patch level is %d, expected %d", current, len(patches))
+	}
+	return nil
+}
+
 // Ensure that the schema exists.
 func ensureSchemaTableExists(ctx context.Context, tx *sql.Tx) error {
 	exists, err := doesSchemaTableExist(ctx, tx)
@@ -113,15 +138,14 @@ func ensureSchemaTableExists(ctx context.Context, tx *sql.Tx) error {
 		return errors.Errorf("failed to check if schema table is there: %v", err)
 	}
 	if !exists {
-		err := createSchemaTable(ctx, tx)
-		if err != nil {
+		if err := createSchemaTable(ctx, tx); err != nil {
 			return errors.Errorf("failed to create schema table: %v", err)
 		}
 	}
 	return nil
 }
 
-// Apply any pending update that was not yet applied.
+// Apply any pending patch that was not yet applied.
 func ensurePatchsAreApplied(ctx context.Context, tx *sql.Tx, current int, patches []Patch, hook Hook) error {
 	if current > len(patches) {
 		return errors.Errorf(
@@ -141,7 +165,7 @@ func ensurePatchsAreApplied(ctx context.Context, tx *sql.Tx, current int, patche
 			return errors.Trace(err)
 		}
 
-		if err := hook(current, ctx, tx); err != nil {
+		if err := hook(ctx, tx, current); err != nil {
 			return errors.Annotatef(err, "failed to execute hook (version %d)", current)
 		}
 
@@ -165,4 +189,34 @@ INSERT INTO schema (version, updated_at) VALUES (?, strftime("%s"))
 `
 	_, err := tx.ExecContext(ctx, statement, new)
 	return err
+}
+
+// Return a list of SQL statements that can be used to create all tables in the
+// database.
+func selectTablesSQL(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	statement := `
+SELECT sql FROM sqlite_master WHERE
+  type IN ('table', 'index', 'view', 'trigger') AND
+  name != 'schema' AND
+  name NOT LIKE 'sqlite_%'
+ORDER BY name
+`
+	rows, err := tx.QueryContext(ctx, statement)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, errors.Trace(err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Trace(err)
+	}
+	return tables, nil
 }
