@@ -11,6 +11,7 @@ import (
 
 	"github.com/SimonRichardson/nu-juju-data/db"
 	"github.com/SimonRichardson/nu-juju-data/repl"
+	"github.com/SimonRichardson/nu-juju-data/server"
 	"github.com/SimonRichardson/nu-juju-data/state"
 	"github.com/canonical/go-dqlite/app"
 	"github.com/canonical/go-dqlite/client"
@@ -74,7 +75,13 @@ func doItLive() {
 			}
 
 			// Log out the current applied schema.
-			fmt.Println(state.SchemaManager().Applied())
+			// fmt.Println(state.SchemaManager().Applied())
+
+			server := server.New(state)
+			listener, err := server.Serve(apiAddr)
+			if err != nil {
+				return err
+			}
 
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, unix.SIGPWR)
@@ -86,6 +93,8 @@ func doItLive() {
 			case <-ch:
 			}
 			dqliteDB.Close()
+
+			listener.Close()
 
 			app.Handover(context.Background())
 			app.Close()

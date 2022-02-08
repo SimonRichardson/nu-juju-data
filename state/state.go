@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/SimonRichardson/nu-juju-data/state/actionstate"
 	"github.com/SimonRichardson/nu-juju-data/state/schemastate"
 	"gopkg.in/tomb.v2"
 )
@@ -14,9 +15,11 @@ type State struct {
 	stateEng *StateEngine
 	tomb     *tomb.Tomb
 	// managers
-	mutex     sync.Mutex
-	started   bool
+	mutex   sync.Mutex
+	started bool
+
 	schemaMgr *schemastate.SchemaManager
+	actionMgr *actionstate.ActionManager
 }
 
 // NewState state creates a managed system state encapsulating a backend.
@@ -29,6 +32,9 @@ func NewState(backend Backend) *State {
 	// Ensure we register the new schema manager first.
 	s.schemaMgr = schemastate.NewManager(backend)
 	s.stateEng.AddManager(s.schemaMgr)
+
+	s.actionMgr = actionstate.NewManager(backend)
+	s.stateEng.AddManager(s.actionMgr)
 
 	return s
 }
@@ -70,4 +76,9 @@ func (s *State) StateEngine() *StateEngine {
 // SchemaManager returns the schema manager from the state.
 func (s *State) SchemaManager() *schemastate.SchemaManager {
 	return s.schemaMgr
+}
+
+// ActionManager returns the action manager from the state.
+func (s *State) ActionManager() *actionstate.ActionManager {
+	return s.actionMgr
 }

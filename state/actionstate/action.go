@@ -1,46 +1,8 @@
 package actionstate
 
 import (
-	"time"
-
-	"github.com/juju/names"
+	"database/sql"
 )
-
-// ActionStatus represents the possible end states for an action.
-type ActionStatus string
-
-const (
-	// ActionError signifies that the action did get run due to an error.
-	ActionError ActionStatus = "error"
-
-	// ActionFailed signifies that the action did not complete successfully.
-	ActionFailed ActionStatus = "failed"
-
-	// ActionCompleted indicates that the action ran to completion as intended.
-	ActionCompleted ActionStatus = "completed"
-
-	// ActionCancelled means that the Action was cancelled before being run.
-	ActionCancelled ActionStatus = "cancelled"
-
-	// ActionPending is the default status when an Action is first queued.
-	ActionPending ActionStatus = "pending"
-
-	// ActionRunning indicates that the Action is currently running.
-	ActionRunning ActionStatus = "running"
-
-	// ActionAborting indicates that the Action is running but should be
-	// aborted.
-	ActionAborting ActionStatus = "aborting"
-
-	// ActionAborted indicates the Action was aborted.
-	ActionAborted ActionStatus = "aborted"
-)
-
-// ActionMessage represents a progress message logged by an action.
-type ActionMessage struct {
-	Message   string    `db:"message"`
-	Timestamp time.Time `db:"timestamp"`
-}
 
 type Action struct {
 	ID  int64  `db:"id"`
@@ -56,16 +18,16 @@ type Action struct {
 
 	// Parameters holds the action's parameters, if any; it should validate
 	// against the schema defined by the named action in the unit's charm.
-	Parameters map[string]interface{} `db:"parameters"`
+	Parameters []byte `db:"parameters_json"`
 
 	// Enqueued is the time the action was added.
-	Enqueued time.Time `db:"enqueued"`
+	Enqueued sql.NullTime `db:"enqueued"`
 
 	// Started reflects the time the action began running.
-	Started time.Time `db:"started"`
+	Started sql.NullTime `db:"started"`
 
 	// Completed reflects the time that the action was finished.
-	Completed time.Time `db:"completed"`
+	Completed sql.NullTime `db:"completed"`
 
 	// Operation is the parent operation of the action.
 	Operation string `db:"operation"`
@@ -73,20 +35,8 @@ type Action struct {
 	// Status represents the end state of the Action; ActionFailed for an
 	// action that was removed prematurely, or that failed, and
 	// ActionCompleted for an action that successfully completed.
-	Status ActionStatus `db:"status"`
+	Status sql.NullString `db:"status"`
 
 	// Message captures any error returned by the action.
-	Message string `db:"message"`
-
-	// Results are the structured results from the action.
-	Results map[string]interface{} `db:"results"`
-
-	// Logs holds the progress messages logged by the action.
-	Logs []ActionMessage `db:"logs"`
-}
-
-// ActionTag returns an ActionTag constructed from this action's
-// Prefix and Sequence.
-func (a *Action) ActionTag() names.ActionTag {
-	return names.NewActionTag(a.Tag)
+	Message sql.NullString `db:"message"`
 }
