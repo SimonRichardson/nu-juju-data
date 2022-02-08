@@ -2,8 +2,8 @@ package schemastate
 
 import (
 	"context"
-	"database/sql"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
@@ -12,10 +12,11 @@ var patches = []Patch{
 	patchV1,
 }
 
-func patchV0(ctx context.Context, tx *sql.Tx) error {
+func patchV0(ctx context.Context, tx *sqlx.Tx) error {
 	_, err := tx.ExecContext(context.TODO(), `
 CREATE TABLE IF NOT EXISTS actions (
-	id INTEGER PRIMARY KEY AUTOINCREMENT, 
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tag TEXT,
 	receiver TEXT,
 	name TEXT,
 	parameters_json TEXT,
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS actions_results (
 	return errors.Trace(err)
 }
 
-func patchV1(ctx context.Context, tx *sql.Tx) error {
+func patchV1(ctx context.Context, tx *sqlx.Tx) error {
 	_, err := tx.ExecContext(context.TODO(), `
 CREATE TABLE IF NOT EXISTS operations (
 	id INTEGER PRIMARY KEY AUTOINCREMENT, 

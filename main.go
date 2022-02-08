@@ -67,7 +67,7 @@ func doItLive() {
 				return err
 			}
 
-			backend := db.NewSQLDatabase(dqliteDB)
+			backend := db.NewSQLDatabase(dqliteDB, app.Driver())
 			state := state.NewState(backend)
 			if err := state.StartUp(context.Background()); err != nil {
 				return err

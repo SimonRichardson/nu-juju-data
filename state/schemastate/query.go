@@ -2,36 +2,17 @@ package schemastate
 
 import (
 	"context"
-	"database/sql"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
 // doesSchemaTableExist return whether the schema table is present in the
 // database.
-func doesSchemaTableExist(ctx context.Context, tx *sql.Tx) (bool, error) {
-	statement := `
-SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schema'
-`
-	rows, err := tx.QueryContext(ctx, statement)
-	if err != nil {
-		return false, errors.Trace(err)
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		return false, errors.Errorf("schema table query returned no rows")
-	}
-
+func doesSchemaTableExist(ctx context.Context, tx *sqlx.Tx) (bool, error) {
 	var count int
-	if err := rows.Scan(&count); err != nil {
-		return false, errors.Trace(err)
-	}
-	if err := rows.Err(); err != nil {
-		return false, errors.Trace(err)
-	}
-
-	return count == 1, nil
+	err := tx.GetContext(ctx, &count, "SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schema'")
+	return count == 1, errors.Trace(err)
 }
 
 const schemaTable = `
@@ -44,14 +25,14 @@ CREATE TABLE schema (
 `
 
 // Create the schema table.
-func createSchemaTable(ctx context.Context, tx *sql.Tx) error {
+func createSchemaTable(ctx context.Context, tx *sqlx.Tx) error {
 	_, err := tx.ExecContext(ctx, schemaTable)
 	return errors.Trace(err)
 }
 
 // Return the highest patch version currently applied. Zero means that no
 // patches have been applied yet.
-func queryCurrentVersion(ctx context.Context, tx *sql.Tx) (int, error) {
+func queryCurrentVersion(ctx context.Context, tx *sqlx.Tx) (int, error) {
 	versions, err := selectSchemaVersions(ctx, tx)
 	if err != nil {
 		return -1, errors.Errorf("failed to fetch patch versions: %v", err)
@@ -71,30 +52,10 @@ func queryCurrentVersion(ctx context.Context, tx *sql.Tx) (int, error) {
 }
 
 // Return all versions in the schema table, in increasing order.
-func selectSchemaVersions(ctx context.Context, tx *sql.Tx) ([]int, error) {
-	statement := `
-SELECT version FROM schema ORDER BY version
-`
-	rows, err := tx.QueryContext(ctx, statement)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	defer rows.Close()
-
+func selectSchemaVersions(ctx context.Context, tx *sqlx.Tx) ([]int, error) {
 	var values []int
-	for rows.Next() {
-		var value int
-		err := rows.Scan(&value)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		values = append(values, value)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, errors.Trace(err)
-	}
-	return values, nil
+	err := tx.SelectContext(ctx, &values, "SELECT version FROM schema ORDER BY version")
+	return values, errors.Trace(err)
 }
 
 // Check that the given list of update version numbers doesn't have "holes",
@@ -110,7 +71,7 @@ func checkSchemaVersionsHaveNoHoles(versions []int) error {
 }
 
 // Check that all the given patches are applied.
-func checkAllPatchesAreApplied(ctx context.Context, tx *sql.Tx, patches []Patch) error {
+func checkAllPatchesAreApplied(ctx context.Context, tx *sqlx.Tx, patches []Patch) error {
 	versions, err := selectSchemaVersions(ctx, tx)
 	if err != nil {
 		return errors.Errorf("failed to fetch patch versions: %v", err)
@@ -133,7 +94,7 @@ func checkAllPatchesAreApplied(ctx context.Context, tx *sql.Tx, patches []Patch)
 }
 
 // Ensure that the schema exists.
-func ensureSchemaTableExists(ctx context.Context, tx *sql.Tx) error {
+func ensureSchemaTableExists(ctx context.Context, tx *sqlx.Tx) error {
 	exists, err := doesSchemaTableExist(ctx, tx)
 	if err != nil {
 		return errors.Errorf("failed to check if schema table is there: %v", err)
@@ -147,7 +108,7 @@ func ensureSchemaTableExists(ctx context.Context, tx *sql.Tx) error {
 }
 
 // Apply any pending patch that was not yet applied.
-func ensurePatchsAreApplied(ctx context.Context, tx *sql.Tx, current int, patches []Patch, hook Hook) error {
+func ensurePatchsAreApplied(ctx context.Context, tx *sqlx.Tx, current int, patches []Patch, hook Hook) error {
 	if current > len(patches) {
 		return errors.Errorf(
 			"schema version '%d' is more recent than expected '%d'",
@@ -184,7 +145,7 @@ func ensurePatchsAreApplied(ctx context.Context, tx *sql.Tx, current int, patche
 }
 
 // Insert a new version into the schema table.
-func insertSchemaVersion(ctx context.Context, tx *sql.Tx, new int) error {
+func insertSchemaVersion(ctx context.Context, tx *sqlx.Tx, new int) error {
 	statement := `
 INSERT INTO schema (version, updated_at) VALUES (?, strftime("%s"))
 `
@@ -194,7 +155,7 @@ INSERT INTO schema (version, updated_at) VALUES (?, strftime("%s"))
 
 // Return a list of SQL statements that can be used to create all tables in the
 // database.
-func selectTablesSQL(ctx context.Context, tx *sql.Tx) ([]string, error) {
+func selectTablesSQL(ctx context.Context, tx *sqlx.Tx) ([]string, error) {
 	statement := `
 SELECT sql FROM sqlite_master WHERE
   type IN ('table', 'index', 'view', 'trigger') AND
@@ -202,22 +163,7 @@ SELECT sql FROM sqlite_master WHERE
   name NOT LIKE 'sqlite_%'
 ORDER BY name
 `
-	rows, err := tx.QueryContext(ctx, statement)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	defer rows.Close()
-
 	var tables []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, errors.Trace(err)
-		}
-		tables = append(tables, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Trace(err)
-	}
-	return tables, nil
+	err := tx.SelectContext(ctx, &tables, statement)
+	return tables, errors.Trace(err)
 }

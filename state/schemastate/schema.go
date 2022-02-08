@@ -2,10 +2,10 @@ package schemastate
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
@@ -18,10 +18,10 @@ type Schema struct {
 
 // Patch applies a specific schema change to a database, and returns an error
 // if anything goes wrong.
-type Patch func(context.Context, *sql.Tx) error
+type Patch func(context.Context, *sqlx.Tx) error
 
 // Hook is a callback that gets fired when a update gets applied.
-type Hook func(context.Context, *sql.Tx, int) error
+type Hook func(context.Context, *sqlx.Tx, int) error
 
 // New creates a new schema Schema with the given patches.
 func New(patches []Patch) *Schema {
@@ -78,7 +78,7 @@ func (s *Schema) Ensure(backend Backend) (ChangeSet, error) {
 		current = -1
 		applied = -1
 	)
-	err := backend.Run(func(ctx context.Context, t *sql.Tx) error {
+	err := backend.Run(func(ctx context.Context, t *sqlx.Tx) error {
 		err := ensureSchemaTableExists(ctx, t)
 		if err != nil {
 			return errors.Trace(err)
@@ -112,7 +112,7 @@ func (s *Schema) Ensure(backend Backend) (ChangeSet, error) {
 // fresh install if required.
 func (s *Schema) Applied(backend Backend) (string, error) {
 	var applied []string
-	err := backend.Run(func(ctx context.Context, tx *sql.Tx) error {
+	err := backend.Run(func(ctx context.Context, tx *sqlx.Tx) error {
 		var err error
 		applied, err = s.applied(ctx, tx)
 		return errors.Trace(err)
@@ -123,7 +123,7 @@ func (s *Schema) Applied(backend Backend) (string, error) {
 	return strings.Join(applied, ";\n"), nil
 }
 
-func (s *Schema) applied(ctx context.Context, tx *sql.Tx) ([]string, error) {
+func (s *Schema) applied(ctx context.Context, tx *sqlx.Tx) ([]string, error) {
 	if err := checkAllPatchesAreApplied(ctx, tx, s.patches); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -143,4 +143,4 @@ INSERT INTO schema (version, updated_at) VALUES (%d, strftime("%%s"))
 }
 
 // omitHook always returns a nil, omitting the error.
-func omitHook(context.Context, *sql.Tx, int) error { return nil }
+func omitHook(context.Context, *sqlx.Tx, int) error { return nil }

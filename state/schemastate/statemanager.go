@@ -2,16 +2,16 @@ package schemastate
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
 type Backend interface {
 	// Run is a convince function for running one shot transactions, which
 	// correctly handles the rollback semantics and retries where available.
-	Run(func(context.Context, *sql.Tx) error) error
+	Run(func(context.Context, *sqlx.Tx) error) error
 }
 
 type SchemaManager struct {
@@ -28,7 +28,7 @@ func NewManager(backend Backend) *SchemaManager {
 }
 
 func (m *SchemaManager) StartUp(ctx context.Context) error {
-	m.schema.Hook(func(ctx context.Context, tx *sql.Tx, current int) error {
+	m.schema.Hook(func(ctx context.Context, tx *sqlx.Tx, current int) error {
 		fmt.Println("Applying:", current)
 		return nil
 	})

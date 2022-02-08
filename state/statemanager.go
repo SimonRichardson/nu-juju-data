@@ -2,16 +2,16 @@ package state
 
 import (
 	"context"
-	"database/sql"
 	"sync"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
 type Backend interface {
 	// Run is a convince function for running one shot transactions, which
 	// correctly handles the rollback semantics and retries where available.
-	Run(func(context.Context, *sql.Tx) error) error
+	Run(func(context.Context, *sqlx.Tx) error) error
 }
 
 // StateManager is implemented by types responsible for observing

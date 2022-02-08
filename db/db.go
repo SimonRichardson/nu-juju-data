@@ -4,19 +4,20 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
 // SQLDatabase creates a new SQL Database for handling transactions with the
 // required retry semantics.
 type SQLDatabase struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
 // NewSQLDatabase creates a new SQLDatabase from a given *sql.DB
-func NewSQLDatabase(db *sql.DB) *SQLDatabase {
+func NewSQLDatabase(db *sql.DB, driverName string) *SQLDatabase {
 	return &SQLDatabase{
-		db: db,
+		db: sqlx.NewDb(db, driverName),
 	}
 }
 
@@ -24,7 +25,7 @@ func NewSQLDatabase(db *sql.DB) *SQLDatabase {
 // handles the rollback semantics and retries where available.
 // The run function maybe called multiple times if the transaction is being
 // retried.
-func (s *SQLDatabase) Run(fn func(context.Context, *sql.Tx) error) error {
+func (s *SQLDatabase) Run(fn func(context.Context, *sqlx.Tx) error) error {
 	txn, err := s.CreateTxn(context.Background())
 	if err != nil {
 		return errors.Trace(err)
@@ -48,16 +49,16 @@ func (s *SQLDatabase) CreateTxn(ctx context.Context) (TxnBuilder, error) {
 // The functions in the txn builder maybe called multiple times depending on
 // how many retries are employed.
 type TxnBuilder interface {
-	Stage(func(context.Context, *sql.Tx) error) TxnBuilder
+	Stage(func(context.Context, *sqlx.Tx) error) TxnBuilder
 	Commit() error
 }
 
 // txnBuilder creates a type for executing transactions and ensuring rollback
 // symantics are employed.
 type txnBuilder struct {
-	db        *sql.DB
+	db        *sqlx.DB
 	ctx       context.Context
-	runnables []func(context.Context, *sql.Tx) error
+	runnables []func(context.Context, *sqlx.Tx) error
 }
 
 // Context returns the underlying TxnBuilder context.
@@ -69,7 +70,7 @@ func (t *txnBuilder) Context() context.Context {
 // isn't committed until the commit method is called.
 // The run function maybe called multiple times if the transaction is being
 // retried.
-func (t *txnBuilder) Stage(fn func(context.Context, *sql.Tx) error) TxnBuilder {
+func (t *txnBuilder) Stage(fn func(context.Context, *sqlx.Tx) error) TxnBuilder {
 	t.runnables = append(t.runnables, fn)
 	return t
 }
@@ -83,7 +84,7 @@ func (t *txnBuilder) Commit() error {
 			return errors.Trace(err)
 		}
 
-		rawTx, err := t.db.BeginTx(t.ctx, nil)
+		rawTx, err := t.db.Beginx()
 		if err != nil {
 			// Nested transactions are not supported, if we get an error during
 			// the begin transaction phase, attempt to rollback both

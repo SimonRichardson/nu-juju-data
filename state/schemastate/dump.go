@@ -2,20 +2,20 @@ package schemastate
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 )
 
 // Dump returns a SQL text dump of all rows across all tables.
 func Dump(backend Backend, schema *Schema) (string, error) {
 	var statements []string
-	err := backend.Run(func(ctx context.Context, tx *sql.Tx) error {
+	err := backend.Run(func(ctx context.Context, tx *sqlx.Tx) error {
 		// Firstly, parse the schema table, checking for the currently applied
 		// schema version.
 		stmts, err := parseTableStatements(tx, "schema", strings.Trim(schemaTable, "\n"))
@@ -96,7 +96,7 @@ func parseTables(schemas []string) []tableSchema {
 
 // parseTableStatements dumps a single table, returning the SQL statements
 // containing statements for its schema and data.
-func parseTableStatements(tx *sql.Tx, table, schema string) ([]string, error) {
+func parseTableStatements(tx *sqlx.Tx, table, schema string) ([]string, error) {
 	statements := []string{schema}
 
 	// Query all rows.
