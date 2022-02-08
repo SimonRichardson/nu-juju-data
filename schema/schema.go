@@ -9,7 +9,7 @@ import (
 	"github.com/juju/errors"
 )
 
-type State interface {
+type Backend interface {
 	// Run is a convince function for running one shot transactions, which
 	// correctly handles the rollback semantics and retries where available.
 	Run(func(context.Context, *sql.Tx) error) error
@@ -79,12 +79,12 @@ type ChangeSet struct {
 //
 // If no error occurs, the integer returned by this method is the
 // initial version that the schema has been upgraded from.
-func (s *Schema) Ensure(st State) (ChangeSet, error) {
+func (s *Schema) Ensure(backend Backend) (ChangeSet, error) {
 	var (
 		current = -1
 		applied = -1
 	)
-	err := st.Run(func(ctx context.Context, t *sql.Tx) error {
+	err := backend.Run(func(ctx context.Context, t *sql.Tx) error {
 		err := ensureSchemaTableExists(ctx, t)
 		if err != nil {
 			return errors.Trace(err)
@@ -116,9 +116,9 @@ func (s *Schema) Ensure(st State) (ChangeSet, error) {
 // Applied returns the SQL commands that has been applied to the database. The
 // applied text returns a flattened list SQL statements that can be used as a
 // fresh install if required.
-func (s *Schema) Applied(state State) (string, error) {
+func (s *Schema) Applied(backend Backend) (string, error) {
 	var applied []string
-	err := state.Run(func(ctx context.Context, tx *sql.Tx) error {
+	err := backend.Run(func(ctx context.Context, tx *sql.Tx) error {
 		var err error
 		applied, err = s.applied(ctx, tx)
 		return errors.Trace(err)

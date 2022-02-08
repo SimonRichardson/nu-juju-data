@@ -7,15 +7,15 @@ import (
 	"github.com/juju/errors"
 )
 
-// State creates a new state manager for handling transactions with the required
-// retry semantics.
-type State struct {
+// SQLDatabase creates a new SQL Database for handling transactions with the
+// required retry semantics.
+type SQLDatabase struct {
 	db *sql.DB
 }
 
-// NewState creates a new State from a given *sql.DB
-func NewState(db *sql.DB) *State {
-	return &State{
+// NewSQLDatabase creates a new SQLDatabase from a given *sql.DB
+func NewSQLDatabase(db *sql.DB) *SQLDatabase {
+	return &SQLDatabase{
 		db: db,
 	}
 }
@@ -24,7 +24,7 @@ func NewState(db *sql.DB) *State {
 // handles the rollback semantics and retries where available.
 // The run function maybe called multiple times if the transaction is being
 // retried.
-func (s *State) Run(fn func(context.Context, *sql.Tx) error) error {
+func (s *SQLDatabase) Run(fn func(context.Context, *sql.Tx) error) error {
 	txn, err := s.CreateTxn(context.Background())
 	if err != nil {
 		return errors.Trace(err)
@@ -35,7 +35,7 @@ func (s *State) Run(fn func(context.Context, *sql.Tx) error) error {
 
 // CreateTxn creates a transaction builder. The transaction builder accumulates
 // a series of functions that can be executed on a given commit.
-func (s *State) CreateTxn(ctx context.Context) (TxnBuilder, error) {
+func (s *SQLDatabase) CreateTxn(ctx context.Context) (TxnBuilder, error) {
 	return &txnBuilder{
 		db:  s.db,
 		ctx: ctx,

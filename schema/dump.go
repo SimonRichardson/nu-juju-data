@@ -13,9 +13,9 @@ import (
 )
 
 // Dump returns a SQL text dump of all rows across all tables.
-func Dump(state State, schema *Schema) (string, error) {
+func Dump(backend Backend, schema *Schema) (string, error) {
 	var statements []string
-	err := state.Run(func(ctx context.Context, tx *sql.Tx) error {
+	err := backend.Run(func(ctx context.Context, tx *sql.Tx) error {
 		// Firstly, parse the schema table, checking for the currently applied
 		// schema version.
 		stmts, err := parseTableStatements(tx, "schema", strings.Trim(schemaTable, "\n"))
