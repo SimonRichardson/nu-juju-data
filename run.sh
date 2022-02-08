@@ -61,6 +61,12 @@ function port {
 
 trap cleanup EXIT
 
+curl -X POST http://127.0.0.1:8666/actions/ \
+   -H 'Content-Type: application/json' \
+   -d '{"receiver":"machine-0","name":"test", "parameters":{"a": 1}, "operation": "machine-0"}'
+
+curl http://127.0.0.1:8666/actions/1
+
 # Show the repl if requested.
 if [ -n "$REPL" ]; then 
     rlwrap -H ~/.dqlite_repl.history socat - ./example0/juju.sock
