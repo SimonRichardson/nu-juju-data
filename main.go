@@ -74,7 +74,7 @@ func doItLive() {
 			}
 
 			// Log out the current applied schema.
-			// fmt.Println(state.SchemaManager().Applied())
+			fmt.Println(state.SchemaManager().Applied())
 
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, unix.SIGPWR)

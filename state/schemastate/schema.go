@@ -1,4 +1,4 @@
-package schema
+package schemastate
 
 import (
 	"context"
@@ -8,12 +8,6 @@ import (
 
 	"github.com/juju/errors"
 )
-
-type Backend interface {
-	// Run is a convince function for running one shot transactions, which
-	// correctly handles the rollback semantics and retries where available.
-	Run(func(context.Context, *sql.Tx) error) error
-}
 
 // Schema captures the schema of a database in terms of a series of ordered
 // updates.

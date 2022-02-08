@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/SimonRichardson/nu-juju-data/schema"
 	"github.com/juju/errors"
 )
 
@@ -17,14 +16,14 @@ type Backend interface {
 
 type SchemaManager struct {
 	backend Backend
-	schema  *schema.Schema
+	schema  *Schema
 }
 
 // NewManager creates a new manager from a backend.
 func NewManager(backend Backend) *SchemaManager {
 	return &SchemaManager{
 		backend: backend,
-		schema:  schema.New(patches),
+		schema:  New(patches),
 	}
 }
 
@@ -46,6 +45,6 @@ func (m *SchemaManager) Applied() (string, error) {
 }
 
 // Schema returns the underlying schema that is being managed.
-func (m *SchemaManager) Schema() *schema.Schema {
+func (m *SchemaManager) Schema() *Schema {
 	return m.schema
 }

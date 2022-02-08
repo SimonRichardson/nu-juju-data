@@ -4,11 +4,10 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/SimonRichardson/nu-juju-data/schema"
 	"github.com/juju/errors"
 )
 
-var patches = []schema.Patch{
+var patches = []Patch{
 	patchV0,
 	patchV1,
 }
