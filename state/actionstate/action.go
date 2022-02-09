@@ -2,6 +2,14 @@ package actionstate
 
 import (
 	"database/sql"
+	"encoding/json"
+	"time"
+
+	"github.com/SimonRichardson/nu-juju-data/db"
+	"github.com/SimonRichardson/nu-juju-data/model"
+	"github.com/jmoiron/sqlx"
+	"github.com/juju/errors"
+	"github.com/juju/names"
 )
 
 type Action struct {
@@ -39,4 +47,59 @@ type Action struct {
 
 	// Message captures any error returned by the action.
 	Message sql.NullString `db:"message"`
+}
+
+// Fields returns the list of fields directly from an Action type.
+func (a Action) Fields(tx *sqlx.Tx) string {
+	fields, err := db.FieldNames(tx, a)
+	if err != nil {
+		panic("programtic error: " + err.Error())
+	}
+	return fields.Join()
+}
+
+func (a Action) ToModel() (model.Action, error) {
+	var parameters map[string]interface{}
+	if err := json.Unmarshal(a.Parameters, &parameters); err != nil {
+		return model.Action{}, errors.Trace(err)
+	}
+
+	tag, err := names.ParseActionTag(a.Tag)
+	if err != nil {
+		return model.Action{}, errors.Trace(err)
+	}
+
+	status := model.ActionPending
+	if a.Status.Valid {
+		status = model.ActionStatus(a.Status.String)
+	}
+
+	enqueued := time.Time{}
+	if a.Enqueued.Valid {
+		enqueued = a.Enqueued.Time
+	}
+
+	started := time.Time{}
+	if a.Enqueued.Valid {
+		started = a.Started.Time
+	}
+
+	completed := time.Time{}
+	if a.Enqueued.Valid {
+		completed = a.Completed.Time
+	}
+
+	return model.Action{
+		ID:         a.ID,
+		Tag:        tag,
+		Receiver:   a.Receiver,
+		Name:       a.Name,
+		Parameters: parameters,
+		Enqueued:   enqueued,
+		Started:    started,
+		Completed:  completed,
+		Operation:  a.Operation,
+		Status:     status,
+		Message:    a.Message.String,
+	}, nil
 }

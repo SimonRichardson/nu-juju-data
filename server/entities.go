@@ -1,6 +1,10 @@
 package server
 
-import "time"
+import (
+	"time"
+
+	"github.com/SimonRichardson/nu-juju-data/model"
+)
 
 // ActionMessage represents a progress message logged by an action.
 type ActionMessage struct {
@@ -43,6 +47,21 @@ type OutputAction struct {
 
 	// Message captures any error returned by the action.
 	Message string `json:"message"`
+}
+
+func (o OutputAction) FromModel(a model.Action) OutputAction {
+	o.ID = a.ID
+	o.Tag = a.Tag.String()
+	o.Receiver = a.Receiver
+	o.Name = a.Name
+	o.Parameters = a.Parameters
+	o.Enqueued = a.Enqueued
+	o.Started = a.Started
+	o.Completed = a.Completed
+	o.Operation = a.Operation
+	o.Status = string(a.Status)
+	o.Message = a.Message
+	return o
 }
 
 type InputAction struct {

@@ -130,7 +130,7 @@ func (s Server) insertAction(input InputAction) (OutputAction, error) {
 	}
 
 	// Convert to an action entity before sending.
-	return outputAction(action)
+	return OutputAction{}.FromModel(action), nil
 }
 
 func (s Server) getActionByID(id int64) (OutputAction, error) {
@@ -145,7 +145,7 @@ func (s Server) getActionByID(id int64) (OutputAction, error) {
 	}
 
 	// Convert to an action entity before sending.
-	return outputAction(action)
+	return OutputAction{}.FromModel(action), nil
 }
 
 func getActionReqValue(r *http.Request) (string, bool) {
@@ -157,20 +157,4 @@ func getActionReqValue(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return parts[1], true
-}
-
-func outputAction(a model.Action) (OutputAction, error) {
-	return OutputAction{
-		ID:         a.ID,
-		Tag:        a.Tag.String(),
-		Receiver:   a.Receiver,
-		Name:       a.Name,
-		Parameters: a.Parameters,
-		Enqueued:   a.Enqueued,
-		Started:    a.Started,
-		Completed:  a.Completed,
-		Operation:  a.Operation,
-		Status:     string(a.Status),
-		Message:    a.Message,
-	}, nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"time"
 
 	"github.com/SimonRichardson/nu-juju-data/model"
 	"github.com/jmoiron/sqlx"
@@ -41,7 +40,7 @@ func (m *ActionManager) Stop() {}
 // ActionByID returns one action by id.
 func (m *ActionManager) ActionByID(tx *sqlx.Tx, id int64) (model.Action, error) {
 	var action Action
-	err := tx.Get(&action, "SELECT * FROM actions WHERE id=$1", id)
+	err := tx.Get(&action, "SELECT "+action.Fields(tx)+" FROM actions WHERE id=$1", id)
 	if err != nil {
 		if errors.Cause(err) == sql.ErrNoRows {
 			return model.Action{}, errors.NotFoundf("action %v", id)
@@ -49,33 +48,33 @@ func (m *ActionManager) ActionByID(tx *sqlx.Tx, id int64) (model.Action, error) 
 		return model.Action{}, errors.Trace(err)
 	}
 
-	return convertAction(action)
+	return action.ToModel()
 }
 
 // ActionByTag returns one action by tag.
 func (m *ActionManager) ActionByTag(tx *sqlx.Tx, tag names.ActionTag) (model.Action, error) {
 	var action Action
-	err := tx.Get(&action, "SELECT * FROM actions WHERE tag=$1", tag.Id())
+	err := tx.Get(&action, "SELECT "+action.Fields(tx)+" FROM actions WHERE tag=$1", tag.Id())
 	if err != nil {
 		if errors.Cause(err) == sql.ErrNoRows {
 			return model.Action{}, errors.NotFoundf("action %q", tag.Id())
 		}
 		return model.Action{}, errors.Trace(err)
 	}
-	return convertAction(action)
+	return action.ToModel()
 }
 
 // ActionsByName returns a slice of actions that have the same name.
 func (m *ActionManager) ActionsByName(tx *sqlx.Tx, name string) ([]model.Action, error) {
 	var actions []Action
-	err := tx.Select(&actions, "SELECT * FROM actions WHERE name=$1 ORDER BY tag", name)
+	err := tx.Select(&actions, "SELECT "+Action{}.Fields(tx)+" FROM actions WHERE name=$1 ORDER BY tag", name)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	results := make([]model.Action, len(actions))
 	for k, action := range actions {
-		if results[k], err = convertAction(action); err != nil {
+		if results[k], err = action.ToModel(); err != nil {
 			return nil, errors.Trace(err)
 		}
 	}
@@ -94,16 +93,19 @@ func (m *ActionManager) AddAction(tx *sqlx.Tx, receiver names.Tag, operationID, 
 		return model.Action{}, errors.Trace(err)
 	}
 
+	// Input action use to create the db row.
+	action := Action{
+		Tag:        names.NewActionTag(uuid.String()).String(),
+		Receiver:   receiver.String(),
+		Name:       actionName,
+		Parameters: payloadData,
+		Operation:  operationID,
+	}
+
 	result, err := tx.NamedExec(`
 	INSERT INTO actions (tag, receiver, name, parameters_json, operation, enqueued, status)
-	VALUES (:tag, :receiver, :name, :parameters, :operation, DateTime('now'), 'pending')
-	`, map[string]interface{}{
-		"tag":        names.NewActionTag(uuid.String()).String(),
-		"receiver":   receiver.String(),
-		"name":       actionName,
-		"parameters": payloadData,
-		"operation":  operationID,
-	})
+	VALUES (:tag, :receiver, :name, :parameters_json, :operation, DateTime('now'), 'pending')
+	`, action)
 	if err != nil {
 		return model.Action{}, errors.Trace(err)
 	}
@@ -123,50 +125,4 @@ func (m *ActionManager) AddAction(tx *sqlx.Tx, receiver names.Tag, operationID, 
 	}
 
 	return m.ActionByID(tx, id)
-}
-
-func convertAction(action Action) (model.Action, error) {
-	var parameters map[string]interface{}
-	if err := json.Unmarshal(action.Parameters, &parameters); err != nil {
-		return model.Action{}, errors.Trace(err)
-	}
-
-	tag, err := names.ParseActionTag(action.Tag)
-	if err != nil {
-		return model.Action{}, errors.Trace(err)
-	}
-
-	status := model.ActionPending
-	if action.Status.Valid {
-		status = model.ActionStatus(action.Status.String)
-	}
-
-	enqueued := time.Time{}
-	if action.Enqueued.Valid {
-		enqueued = action.Enqueued.Time
-	}
-
-	started := time.Time{}
-	if action.Enqueued.Valid {
-		started = action.Started.Time
-	}
-
-	completed := time.Time{}
-	if action.Enqueued.Valid {
-		completed = action.Completed.Time
-	}
-
-	return model.Action{
-		ID:         action.ID,
-		Tag:        tag,
-		Receiver:   action.Receiver,
-		Name:       action.Name,
-		Parameters: parameters,
-		Enqueued:   enqueued,
-		Started:    started,
-		Completed:  completed,
-		Operation:  action.Operation,
-		Status:     status,
-		Message:    action.Message.String,
-	}, nil
 }
