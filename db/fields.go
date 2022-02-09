@@ -2,6 +2,7 @@ package db
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -18,6 +19,7 @@ func (f FieldsSlice) Join() string {
 // the sqlx.Tx, we can use the existing reflection mapper functionality to
 // get the field names back.
 func FieldNames(tx *sqlx.Tx, arg interface{}) (FieldsSlice, error) {
+	// TODO (stickupkid): Cache the fields slice for a known type.
 	t := reflect.TypeOf(arg)
 	k := t.Kind()
 	switch {
@@ -30,6 +32,7 @@ func FieldNames(tx *sqlx.Tx, arg interface{}) (FieldsSlice, error) {
 		for field := range m {
 			fields = append(fields, field)
 		}
+		sort.Strings(fields)
 		return fields, nil
 
 	case k == reflect.Array || k == reflect.Slice:
@@ -38,11 +41,13 @@ func FieldNames(tx *sqlx.Tx, arg interface{}) (FieldsSlice, error) {
 		props := tx.Mapper.FieldMap(reflect.ValueOf(arg))
 		fields := make(FieldsSlice, 0, len(props))
 		for field := range props {
+			// Skip nested fields.
 			if strings.ContainsRune(field, '.') {
 				continue
 			}
 			fields = append(fields, field)
 		}
+		sort.Strings(fields)
 		return fields, nil
 	}
 

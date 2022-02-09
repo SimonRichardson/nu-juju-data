@@ -75,7 +75,7 @@ func doItLive() {
 			}
 
 			// Log out the current applied schema.
-			// fmt.Println(state.SchemaManager().Applied())
+			fmt.Println(state.SchemaManager().Applied())
 
 			server := server.New(state)
 			listener, err := server.Serve(apiAddr)
