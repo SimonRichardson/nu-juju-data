@@ -11,18 +11,21 @@ import (
 
 	"github.com/SimonRichardson/nu-juju-data/model"
 	"github.com/SimonRichardson/nu-juju-data/state"
+	"github.com/SimonRichardson/nu-juju-data/state/actionstate"
 	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"
 	"github.com/juju/names"
 )
 
 type Server struct {
-	state *state.State
+	state     *state.State
+	actionMgr *actionstate.ActionManager
 }
 
 func New(state *state.State) *Server {
 	return &Server{
-		state: state,
+		state:     state,
+		actionMgr: state.ActionManager(),
 	}
 }
 
@@ -52,8 +55,7 @@ func (s Server) Serve(address string) (net.Listener, error) {
 }
 
 func (s Server) handleActions(w http.ResponseWriter, r *http.Request) {
-	actionManager := s.state.ActionManager()
-
+	var output OutputAction
 	switch r.Method {
 	case "POST":
 		defer r.Body.Close()
@@ -64,33 +66,11 @@ func (s Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		receiverTag, err := names.ParseTag(input.Operation)
+		var err error
+		output, err = s.insertAction(input)
 		if err != nil {
-			http.Error(w, errors.Annotatef(err, "receiver tag").Error(), http.StatusBadRequest)
+			s.handleError(w, r, err)
 			return
-		}
-
-		var action model.Action
-		err = s.state.Backend().Run(func(ctx context.Context, tx *sqlx.Tx) error {
-			var err error
-			action, err = actionManager.AddAction(tx, receiverTag, input.Operation, input.Name, input.Parameters)
-			return errors.Trace(err)
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Convert to an action entity before sending.
-		output, err := outputAction(action)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		encoder := json.NewEncoder(w)
-		encoder.SetIndent("", "    ")
-		if err := encoder.Encode(output); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 
 	case "GET":
@@ -105,33 +85,67 @@ func (s Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var action model.Action
-		err = s.state.Backend().Run(func(ctx context.Context, tx *sqlx.Tx) error {
-			var err error
-			action, err = actionManager.ActionByID(tx, id)
-			return errors.Trace(err)
-		})
+		output, err = s.getActionByID(id)
 		if err != nil {
-			if errors.IsNotFound(err) {
-				http.Error(w, err.Error(), http.StatusNotFound)
-			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
+			s.handleError(w, r, err)
 			return
 		}
 
-		// Convert to an action entity before sending.
-		output, err := outputAction(action)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		encoder := json.NewEncoder(w)
-		encoder.SetIndent("", "    ")
-		if err := encoder.Encode(output); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+	default:
+		http.Error(w, fmt.Sprintf("invalid method %q", r.Method), http.StatusBadRequest)
 	}
+
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "    ")
+	if err := encoder.Encode(output); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s Server) handleError(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.IsNotFound(err):
+		status = http.StatusNotFound
+	case errors.IsBadRequest(err):
+		status = http.StatusBadRequest
+	}
+	http.Error(w, err.Error(), status)
+}
+
+func (s Server) insertAction(input InputAction) (OutputAction, error) {
+	receiverTag, err := names.ParseTag(input.Operation)
+	if err != nil {
+		return OutputAction{}, errors.NewBadRequest(err, "receiver tag")
+	}
+
+	var action model.Action
+	err = s.state.Backend().Run(func(ctx context.Context, tx *sqlx.Tx) error {
+		var err error
+		action, err = s.actionMgr.AddAction(tx, receiverTag, input.Operation, input.Name, input.Parameters)
+		return errors.Trace(err)
+	})
+	if err != nil {
+		return OutputAction{}, errors.Trace(err)
+	}
+
+	// Convert to an action entity before sending.
+	return outputAction(action)
+}
+
+func (s Server) getActionByID(id int64) (OutputAction, error) {
+	var action model.Action
+	err := s.state.Backend().Run(func(ctx context.Context, tx *sqlx.Tx) error {
+		var err error
+		action, err = s.actionMgr.ActionByID(tx, id)
+		return errors.Trace(err)
+	})
+	if err != nil {
+		return OutputAction{}, errors.Trace(err)
+	}
+
+	// Convert to an action entity before sending.
+	return outputAction(action)
 }
 
 func getActionReqValue(r *http.Request) (string, bool) {

@@ -10,6 +10,7 @@ require (
 	github.com/juju/errors v0.0.0-20220203013757-bd733f3c86b9
 	github.com/juju/names v0.0.0-20180129205841-f9b5b8b7614d
 	github.com/juju/retry v0.0.0-20220204093819-62423bf33287
+	github.com/juju/utils v0.0.0-20200116185830-d40c2fe10647
 	github.com/juju/utils/v2 v2.0.0-20210305225158-eedbe7b6b3e2
 	github.com/mattn/go-sqlite3 v1.14.7
 	github.com/spf13/cobra v1.3.0
@@ -23,7 +24,6 @@ require (
 	github.com/google/renameio v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/juju/loggo v0.0.0-20210728185423-eebad3a902c4 // indirect
-	github.com/juju/utils v0.0.0-20200116185830-d40c2fe10647 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3 // indirect
