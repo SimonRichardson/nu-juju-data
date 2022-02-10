@@ -13,7 +13,7 @@ func TestReflect(t *testing.T) {
 	structMap, err := Reflect(reflect.ValueOf(&s))
 	assertNil(t, err)
 	assertTrue(t, len(structMap.Fields) == 2)
-	assertEquals(t, structMap.FieldNames(), []string{"ID", "Name"})
+	assertEquals(t, structMap.FieldNames(), []string{"id", "name"})
 }
 
 func assertNil(t *testing.T, err error) {

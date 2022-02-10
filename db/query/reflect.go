@@ -17,7 +17,7 @@ type ReflectTag struct {
 type ReflectField struct {
 	Name        string
 	Tag         ReflectTag
-	StructField reflect.StructField
+	StructField reflect.Value
 }
 
 type ReflectStruct struct {
@@ -54,10 +54,15 @@ func Reflect(value reflect.Value) (ReflectStruct, error) {
 			return ReflectStruct{}, errors.Trace(err)
 		}
 
-		refStruct.Fields[field.Name] = ReflectField{
+		name := tag.Name
+		if name == "" {
+			name = strings.ToLower(field.Name)
+		}
+
+		refStruct.Fields[name] = ReflectField{
 			Name:        field.Name,
 			Tag:         tag,
-			StructField: field,
+			StructField: value.Field(i),
 		}
 	}
 
