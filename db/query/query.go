@@ -70,7 +70,7 @@ type Query struct {
 //    d. Supply the additional arguments to the query.
 // 3. No names with in the query, pass all arguments to the query.
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
-	var names []bind
+	var names []nameBinding
 	if offset := indexOfNamedArgs(stmt); offset >= 0 {
 		var err error
 		if names, err = parseNames(stmt, offset); err != nil {
@@ -192,7 +192,7 @@ func indexOfNamedArgs(stmt string) int {
 	return -1
 }
 
-type bind struct {
+type nameBinding struct {
 	prefix rune
 	name   string
 }
@@ -212,8 +212,8 @@ type bind struct {
 //  - NNN represents an integer literal
 //  - VVV represents an alphanumeric identifier.
 //
-func parseNames(stmt string, offset int) ([]bind, error) {
-	var names []bind
+func parseNames(stmt string, offset int) ([]nameBinding, error) {
+	var names []nameBinding
 
 	// Use the offset to jump ahead of the statement.
 	for i := offset; i < len(stmt); i++ {
@@ -239,7 +239,7 @@ func parseNames(stmt string, offset int) ([]bind, error) {
 				}
 				return nil, errors.Errorf("unexpected named argument found in statement %q", stmt)
 			}
-			names = append(names, bind{
+			names = append(names, nameBinding{
 				prefix: r,
 				name:   name,
 			})
@@ -270,7 +270,7 @@ func isNameTerminator(a rune) bool {
 	return unicode.IsSpace(a) || a == ',' || a == ';' || a == '='
 }
 
-func constructNamedArgs(arg interface{}, names []bind) ([]sql.NamedArg, error) {
+func constructNamedArgs(arg interface{}, names []nameBinding) ([]sql.NamedArg, error) {
 	t := reflect.TypeOf(arg)
 	k := t.Kind()
 	switch {
@@ -331,18 +331,18 @@ func indexOfFieldArgs(stmt string) int {
 	return strings.IndexRune(stmt, '{')
 }
 
-type fieldBind struct {
+type fieldBinding struct {
 	name       string
 	prefix     string
 	start, end int
 }
 
-func (f fieldBind) translate(expantion int) int {
+func (f fieldBinding) translate(expantion int) int {
 	return expantion - (f.end - f.start)
 }
 
-func parseFields(stmt string, offset int) ([]fieldBind, error) {
-	var fields []fieldBind
+func parseFields(stmt string, offset int) ([]fieldBinding, error) {
+	var fields []fieldBinding
 	for i := offset; i < len(stmt); i++ {
 		r := rune(stmt[i])
 		if r != '{' {
@@ -379,7 +379,7 @@ func parseFields(stmt string, offset int) ([]fieldBind, error) {
 				return nil, errors.Errorf("unexpected struct name in statement")
 			}
 		}
-		fields = append(fields, fieldBind{
+		fields = append(fields, fieldBinding{
 			name:   strings.TrimSpace(name),
 			prefix: prefix,
 			start:  offset,
@@ -424,7 +424,7 @@ loop:
 	return prefix, i, nil
 }
 
-func expandFields(stmt string, fields []fieldBind, entities []ReflectStruct) (string, error) {
+func expandFields(stmt string, fields []fieldBinding, entities []ReflectStruct) (string, error) {
 	var offset int
 	for _, field := range fields {
 

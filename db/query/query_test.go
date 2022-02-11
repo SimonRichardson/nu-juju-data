@@ -10,7 +10,7 @@ import (
 func TestParseNames(t *testing.T) {
 	names, err := parseNames("SELECT :name FROM @table WHERE $id=1 AND ?42=2 AND ?=3;", 0)
 	assertNil(t, err)
-	assertEquals(t, names, []bind{
+	assertEquals(t, names, []nameBinding{
 		{'?', "42"},
 		{'$', "id"},
 		{':', "name"},
@@ -22,7 +22,7 @@ func TestConstructNamedArgsWithMap(t *testing.T) {
 	namedArgs, err := constructNamedArgs(map[string]interface{}{
 		"name": "meshuggah",
 		"age":  42,
-	}, []bind{
+	}, []nameBinding{
 		{':', "name"},
 		{'@', "age"},
 	})
@@ -41,7 +41,7 @@ func TestConstructNamedArgsWithStruct(t *testing.T) {
 		Name: "meshuggah",
 		Age:  42,
 	}
-	namedArgs, err := constructNamedArgs(arg, []bind{
+	namedArgs, err := constructNamedArgs(arg, []nameBinding{
 		{':', "name"},
 		{'@', "age"},
 	})
@@ -127,7 +127,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 
 func TestExpandFields(t *testing.T) {
 	stmt := "SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;"
-	fields := []fieldBind{{
+	fields := []fieldBinding{{
 		name:  "Person",
 		start: 7,
 		end:   15,
