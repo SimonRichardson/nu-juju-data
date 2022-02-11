@@ -10,8 +10,12 @@ import (
 	"github.com/juju/errors"
 )
 
+// Hook is used to analyze the queries that are being queried.
+type Hook func(string)
+
 type Querier struct {
 	reflect *ReflectCache
+	hook    Hook
 }
 
 // NewQuerier creates a new querier for selecting queries.
@@ -19,6 +23,12 @@ func NewQuerier() *Querier {
 	return &Querier{
 		reflect: NewReflectCache(),
 	}
+}
+
+// Hook assigns the hook to the querier. Each hook call precedes the actual
+// query.
+func (q *Querier) Hook(hook Hook) {
+	q.hook = hook
 }
 
 // ForOne creates a query for a set of given types.
@@ -42,12 +52,14 @@ func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 	return Query{
 		entities: entities,
 		names:    names,
+		hook:     q.hook,
 	}, nil
 }
 
 type Query struct {
 	entities []ReflectStruct
 	names    []string
+	hook     Hook
 }
 
 // 1. If the query contains named arguments, extract all the names.
@@ -85,6 +97,22 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 	// Put the named arguments at the end of the query.
 	for _, input := range inputs {
 		args = append(args, input)
+	}
+
+	if offset := indexOfFieldArgs(stmt); offset >= 0 {
+		fields, err := parseFields(stmt, offset)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		stmt, err = expandFields(stmt, fields, q.entities)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	// Call the hook, before making the query.
+	if q.hook != nil {
+		q.hook(stmt)
 	}
 
 	rows, err := tx.Query(stmt, args...)
@@ -145,8 +173,7 @@ var prefixes = map[rune]bindCharPredicate{
 }
 
 // indexOfNamedArgs returns the potential starting index of a named argument
-// with  if the statement contains the named args
-// prefix.
+// within the statement contains the named args prefix.
 // This can return a false positives.
 func indexOfNamedArgs(stmt string) int {
 	// Let's be explicit that we've found something, we could just use the
@@ -290,10 +317,107 @@ func constructNamedArgs(arg interface{}, names []bind) ([]sql.NamedArg, error) {
 // are convertible to map[string]interface{} as well.
 func convertMapStringInterface(v interface{}) (map[string]interface{}, bool) {
 	var m map[string]interface{}
-	mtype := reflect.TypeOf(m)
+	mType := reflect.TypeOf(m)
 	t := reflect.TypeOf(v)
-	if !t.ConvertibleTo(mtype) {
+	if !t.ConvertibleTo(mType) {
 		return nil, false
 	}
-	return reflect.ValueOf(v).Convert(mtype).Interface().(map[string]interface{}), true
+	return reflect.ValueOf(v).Convert(mType).Interface().(map[string]interface{}), true
+}
+
+// indexOfFieldArgs returns the potential starting index of a field argument
+// if the statement contains the field args offset position.
+func indexOfFieldArgs(stmt string) int {
+	return strings.IndexRune(stmt, '{')
+}
+
+type fieldBind struct {
+	name       string
+	start, end int
+}
+
+func (f fieldBind) translate(expantion int) int {
+	return expantion - (f.end - f.start)
+}
+
+func parseFields(stmt string, offset int) ([]fieldBind, error) {
+	var fields []fieldBind
+	for i := offset; i < len(stmt); i++ {
+		r := rune(stmt[i])
+		if r != '{' {
+			return fields, nil
+		}
+
+		var name string
+	inner:
+		for i = i + 1; i < len(stmt); i++ {
+			char := rune(stmt[i])
+
+			switch {
+			case unicode.IsLetter(char) || unicode.IsSpace(char):
+				fallthrough
+
+			case len(name) > 0 && unicode.IsDigit(char):
+				fallthrough
+
+			case char == '_':
+				name += string(char)
+
+			case char == '}':
+				break inner
+
+			default:
+				return nil, errors.Errorf("unexpected struct name in statement")
+			}
+		}
+		fields = append(fields, fieldBind{
+			name:  name,
+			start: offset,
+			end:   i + 1,
+		})
+
+		if i >= len(stmt) {
+			// We're done processing the stmt.
+			break
+		}
+		index := indexOfFieldArgs(stmt[i:])
+		if index == -1 {
+			// No additional names, skip.
+			break
+		}
+		// We want to reduce the index by 1, so that we also pick up the
+		// prefix, otherwise we skip over it.
+		offset = i + index
+		i = offset - 1
+	}
+	return fields, nil
+}
+
+func expandFields(stmt string, fields []fieldBind, entities []ReflectStruct) (string, error) {
+	var offset int
+	for _, field := range fields {
+
+		var found bool
+		for _, entity := range entities {
+			if field.name != entity.Name {
+				continue
+			}
+
+			// We've located the entity, now swap out all of it's field names.
+			fieldList := strings.Join(entity.FieldNames(), ", ")
+			stmt = stmt[:offset+field.start] + fieldList + stmt[offset+field.end:]
+
+			// Translate the offset to take into account the new expantions.
+			offset += field.translate(len(fieldList))
+
+			found = true
+			break
+		}
+
+		if !found {
+			return "", errors.Errorf("no entity found with the name %q", field.name)
+		}
+	}
+
+	return stmt, nil
 }

@@ -98,14 +98,20 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	}{
 		Name: "fred",
 	}
-	type Person = struct {
+	type Person struct {
 		Name string `db:"name"`
 		Age  int    `db:"age"`
 	}
 
+	var processedStmt string
+
 	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
 
 	var person Person
+
 	getter, err := querier.ForOne(&person)
 	assertNil(t, err)
 
@@ -114,6 +120,49 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 
 	err = tx.Commit()
 	assertNil(t, err)
-
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
+
+	expected := "SELECT age, name FROM test WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestExpandFields(t *testing.T) {
+	stmt := "SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;"
+	fields := []fieldBind{{
+		name:  "Person",
+		start: 7,
+		end:   15,
+	}, {
+		name:  "Other",
+		start: 17,
+		end:   24,
+	}, {
+		name:  "Another",
+		start: 26,
+		end:   35,
+	}}
+	entities := []ReflectStruct{{
+		Name: "Person",
+		Fields: map[string]ReflectField{
+			"name": {},
+			"age":  {},
+		},
+	}, {
+		Name: "Other",
+		Fields: map[string]ReflectField{
+			"x": {},
+		},
+	}, {
+		Name: "Another",
+		Fields: map[string]ReflectField{
+			"y": {},
+			"z": {},
+		},
+	}}
+
+	res, err := expandFields(stmt, fields, entities)
+	assertNil(t, err)
+
+	expected := "SELECT age, name, x, y, z FROM test WHERE test.name=:name;"
+	assertEquals(t, res, expected)
 }
