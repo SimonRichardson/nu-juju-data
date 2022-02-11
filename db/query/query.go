@@ -21,10 +21,10 @@ func NewQuerier() *Querier {
 	}
 }
 
-// Get creates a query for a set of given types.
+// ForOne creates a query for a set of given types.
 // It should be noted that the select can be cached and the query can be called
 // multiple times.
-func (q *Querier) Get(values ...interface{}) (Query, error) {
+func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 	entities := make([]ReflectStruct, len(values))
 	names := make([]string, len(values))
 	for i, value := range values {

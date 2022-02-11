@@ -106,7 +106,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	querier := NewQuerier()
 
 	var person Person
-	getter, err := querier.Get(&person)
+	getter, err := querier.ForOne(&person)
 	assertNil(t, err)
 
 	err = getter.Query(tx, "SELECT {Person} FROM test WHERE test.name=:name;", arg)
