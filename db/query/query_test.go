@@ -111,18 +111,17 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	})
 
 	var person Person
-
 	getter, err := querier.ForOne(&person)
 	assertNil(t, err)
 
-	err = getter.Query(tx, "SELECT {Person} FROM test WHERE test.name=:name;", arg)
+	err = getter.Query(tx, `SELECT {Person "test"} FROM test WHERE test.name=:name;`, arg)
 	assertNil(t, err)
 
 	err = tx.Commit()
 	assertNil(t, err)
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
 
-	expected := "SELECT age, name FROM test WHERE test.name=:name;"
+	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
 	assertEquals(t, processedStmt, expected)
 }
 

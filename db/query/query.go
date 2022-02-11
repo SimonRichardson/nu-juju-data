@@ -333,6 +333,7 @@ func indexOfFieldArgs(stmt string) int {
 
 type fieldBind struct {
 	name       string
+	prefix     string
 	start, end int
 }
 
@@ -349,6 +350,7 @@ func parseFields(stmt string, offset int) ([]fieldBind, error) {
 		}
 
 		var name string
+		var prefix string
 	inner:
 		for i = i + 1; i < len(stmt); i++ {
 			char := rune(stmt[i])
@@ -363,6 +365,13 @@ func parseFields(stmt string, offset int) ([]fieldBind, error) {
 			case char == '_':
 				name += string(char)
 
+			case char == '"' || char == '\'':
+				var err error
+				prefix, i, err = parsePrefixName(stmt, i+1, char)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+
 			case char == '}':
 				break inner
 
@@ -371,9 +380,10 @@ func parseFields(stmt string, offset int) ([]fieldBind, error) {
 			}
 		}
 		fields = append(fields, fieldBind{
-			name:  name,
-			start: offset,
-			end:   i + 1,
+			name:   strings.TrimSpace(name),
+			prefix: prefix,
+			start:  offset,
+			end:    i + 1,
 		})
 
 		if i >= len(stmt) {
@@ -393,6 +403,27 @@ func parseFields(stmt string, offset int) ([]fieldBind, error) {
 	return fields, nil
 }
 
+func parsePrefixName(stmt string, i int, closer rune) (string, int, error) {
+	var prefix string
+loop:
+	for ; i < len(stmt); i++ {
+		char := rune(stmt[i])
+		switch {
+		case unicode.IsLetter(char):
+			fallthrough
+		case len(prefix) > 0 && unicode.IsDigit(char):
+			fallthrough
+		case char == '_':
+			prefix += string(char)
+		case char == closer:
+			break loop
+		default:
+			return "", -1, errors.Errorf("unexpected field prefix starting at %q", stmt)
+		}
+	}
+	return prefix, i, nil
+}
+
 func expandFields(stmt string, fields []fieldBind, entities []ReflectStruct) (string, error) {
 	var offset int
 	for _, field := range fields {
@@ -404,7 +435,16 @@ func expandFields(stmt string, fields []fieldBind, entities []ReflectStruct) (st
 			}
 
 			// We've located the entity, now swap out all of it's field names.
-			fieldList := strings.Join(entity.FieldNames(), ", ")
+			fieldNames := entity.FieldNames()
+			names := make([]string, len(fieldNames))
+			for k, name := range fieldNames {
+				if field.prefix == "" {
+					names[k] = name
+					continue
+				}
+				names[k] = field.prefix + "." + name
+			}
+			fieldList := strings.Join(names, ", ")
 			stmt = stmt[:offset+field.start] + fieldList + stmt[offset+field.end:]
 
 			// Translate the offset to take into account the new expantions.
