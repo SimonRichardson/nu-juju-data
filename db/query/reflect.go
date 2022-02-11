@@ -15,13 +15,16 @@ type ReflectTag struct {
 }
 
 type ReflectField struct {
-	Name        string
-	Tag         ReflectTag
-	StructField reflect.Value
+	Name  string
+	Tag   ReflectTag
+	Value reflect.Value
 }
 
 type ReflectStruct struct {
+	Name   string
 	Fields map[string]ReflectField
+	Value  reflect.Value
+	Ptr    bool
 }
 
 // FieldNames returns the field names for a given type.
@@ -42,6 +45,7 @@ func Reflect(value reflect.Value) (ReflectStruct, error) {
 	mustBe(value, reflect.Struct)
 
 	refStruct := ReflectStruct{
+		Name:   value.Type().Name(),
 		Fields: make(map[string]ReflectField),
 	}
 
@@ -60,9 +64,9 @@ func Reflect(value reflect.Value) (ReflectStruct, error) {
 		}
 
 		refStruct.Fields[name] = ReflectField{
-			Name:        field.Name,
-			Tag:         tag,
-			StructField: value.Field(i),
+			Name:  field.Name,
+			Tag:   tag,
+			Value: value.Field(i),
 		}
 	}
 

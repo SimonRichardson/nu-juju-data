@@ -3,6 +3,8 @@ package query
 import (
 	"reflect"
 	"testing"
+
+	"github.com/juju/errors"
 )
 
 func TestReflect(t *testing.T) {
@@ -18,6 +20,7 @@ func TestReflect(t *testing.T) {
 
 func assertNil(t *testing.T, err error) {
 	if err != nil {
+		t.Log(errors.ErrorStack(err))
 		t.Fatal(err)
 	}
 }

@@ -68,19 +68,10 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	tx, err := db.Begin()
 	assertNil(t, err)
 
-	rows, err := Query{}.Query(tx, "SELECT name, age FROM test WHERE name=:name;", map[string]interface{}{
+	err = Query{}.Query(tx, "SELECT name, age FROM test WHERE name=:name;", map[string]interface{}{
 		"name": "fred",
 	})
 	assertNil(t, err)
-
-	for rows.Next() {
-		var name string
-		var age int
-		err = rows.Scan(&name, &age)
-		assertNil(t, err)
-		assertEquals(t, name, "fred")
-		assertEquals(t, age, 21)
-	}
 
 	err = tx.Commit()
 	assertNil(t, err)
@@ -107,19 +98,22 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	}{
 		Name: "fred",
 	}
+	type Person = struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
 
-	rows, err := Query{}.Query(tx, "SELECT name, age FROM test WHERE name=:name;", arg)
+	querier := NewQuerier()
+
+	var person Person
+	getter, err := querier.Get(&person)
 	assertNil(t, err)
 
-	for rows.Next() {
-		var name string
-		var age int
-		err = rows.Scan(&name, &age)
-		assertNil(t, err)
-		assertEquals(t, name, "fred")
-		assertEquals(t, age, 21)
-	}
+	err = getter.Query(tx, "SELECT {Person} FROM test WHERE test.name=:name;", arg)
+	assertNil(t, err)
 
 	err = tx.Commit()
 	assertNil(t, err)
+
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
 }

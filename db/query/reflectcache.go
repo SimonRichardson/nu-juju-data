@@ -15,15 +15,16 @@ type ReflectCache struct {
 
 // NewReflectCache creates a new ReflectCache that caches the types for faster
 // look up times.
-func NewReflectCache() ReflectCache {
-	return ReflectCache{
+func NewReflectCache() *ReflectCache {
+	return &ReflectCache{
 		cache: make(map[reflect.Type]ReflectStruct),
 	}
 }
 
 // Reflect will return a Reflectstruct of a given type.
 func (r *ReflectCache) Reflect(value interface{}) (ReflectStruct, error) {
-	v := reflect.Indirect(reflect.ValueOf(value))
+	raw := reflect.ValueOf(value)
+	v := reflect.Indirect(raw)
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -35,6 +36,7 @@ func (r *ReflectCache) Reflect(value interface{}) (ReflectStruct, error) {
 	if err != nil {
 		return ReflectStruct{}, errors.Trace(err)
 	}
+	rs.Ptr = raw.Kind() == reflect.Ptr
 	r.cache[v.Type()] = rs
 	return rs, nil
 }

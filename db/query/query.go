@@ -14,47 +14,61 @@ type Querier struct {
 	reflect *ReflectCache
 }
 
-// Select creates a query for a set of given types.
+// NewQuerier creates a new querier for selecting queries.
+func NewQuerier() *Querier {
+	return &Querier{
+		reflect: NewReflectCache(),
+	}
+}
+
+// Get creates a query for a set of given types.
 // It should be noted that the select can be cached and the query can be called
 // multiple times.
-func (q *Querier) Select(values ...interface{}) Query {
+func (q *Querier) Get(values ...interface{}) (Query, error) {
 	entities := make([]ReflectStruct, len(values))
+	names := make([]string, len(values))
 	for i, value := range values {
 		var err error
 		if entities[i], err = q.reflect.Reflect(value); err != nil {
-			// Should we panic here?
-			panic(err)
+			return Query{}, errors.Trace(err)
 		}
+		if !entities[i].Ptr {
+			return Query{}, errors.Errorf("expected a pointer, not a value for %d of type %T", i, value)
+		}
+
+		names[i] = entities[i].Name
 	}
 
 	return Query{
 		entities: entities,
-	}
+		names:    names,
+	}, nil
 }
 
 type Query struct {
 	entities []ReflectStruct
+	names    []string
 }
 
-func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) (*sql.Rows, error) {
-	// 1. If the query contains named arguments, extract all the names.
-	// 2. If the query contains names:
-	//    a. Use the first argument as the source of the names.
-	//    b. If the first argument is not a map or a struct{} then error out.
-	//    c. If nothing matches error out to be helpful.
-	//    d. Supply the additional arguments to the query.
-	// 3. No names with in the query, pass all arguments to the query.
+// 1. If the query contains named arguments, extract all the names.
+// 2. If the query contains names:
+//    a. Use the first argument as the source of the names.
+//    b. If the first argument is not a map or a struct{} then error out.
+//    c. If nothing matches error out to be helpful.
+//    d. Supply the additional arguments to the query.
+// 3. No names with in the query, pass all arguments to the query.
+func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 	var names []bind
 	if offset := indexOfNamedArgs(stmt); offset >= 0 {
 		var err error
 		if names, err = parseNames(stmt, offset); err != nil {
-			return nil, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	}
 
 	// Ensure we have arguments if we have names.
 	if len(args) == 0 && len(names) > 0 {
-		return nil, errors.Errorf("expected arguments for named parameters")
+		return errors.Errorf("expected arguments for named parameters")
 	}
 
 	var inputs []sql.NamedArg
@@ -62,7 +76,7 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) (*sql.Rows, e
 		// Select the first argument and check if it's a map or struct.
 		var err error
 		if inputs, err = constructNamedArgs(args[0], names); err != nil {
-			return nil, errors.Trace(err)
+			return errors.Trace(err)
 		}
 		// Drop the first argument, as that's used for named arguments.
 		args = args[1:]
@@ -73,7 +87,44 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) (*sql.Rows, e
 		args = append(args, input)
 	}
 
-	return tx.Query(stmt, args...)
+	rows, err := tx.Query(stmt, args...)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer rows.Close()
+
+	// Grab the columns of the rows returned.
+	columns, err := rows.Columns()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// Traverse the entities available, this is where it becomes very difficult
+	// for use. As the sql library doesn't provide the namespaced columns for
+	// us to inspect, so if you have overlapping column names it becomes hard
+	// to know where to locate that information, without a SQL AST.
+	columnar := make([]interface{}, len(columns))
+	for i, column := range columns {
+		var found bool
+		for _, entity := range q.entities {
+			if _, ok := entity.Fields[column]; !ok {
+				continue
+			}
+			columnar[i] = entity.Fields[column].Value.Addr().Interface()
+			found = true
+			break
+		}
+		if !found {
+			return errors.Errorf("missing destination name %q in types %v", column, q.names)
+		}
+	}
+	for rows.Next() {
+		if err := rows.Scan(columnar...); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	return errors.Trace(rows.Err())
 }
 
 type bindCharPredicate func(rune) bool
@@ -222,7 +273,7 @@ func constructNamedArgs(arg interface{}, names []bind) ([]sql.NamedArg, error) {
 		nameValues := make([]sql.NamedArg, len(names))
 		for k, name := range names {
 			if field, ok := ref.Fields[name.name]; ok {
-				fieldValue := field.StructField.Interface()
+				fieldValue := field.Value.Interface()
 				nameValues[k] = sql.Named(name.name, fieldValue)
 				continue
 			}
