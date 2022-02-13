@@ -125,6 +125,59 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	assertEquals(t, processedStmt, expected)
 }
 
+func TestQueryWithStructOverlapping(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	arg := struct {
+		Name string `db:"name"`
+	}{
+		Name: "fred",
+	}
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+	type Record struct {
+		Name string `db:"name"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	var record Record
+	getter, err := querier.ForOne(&person, &record)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {Person "test"}, {Record "sqlite_master"} FROM test,sqlite_master WHERE test.name=:name;`, arg)
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+	assertEquals(t, record, Record{Name: "test"})
+
+	expected := "SELECT test.age, test.name AS _PFX_test_name, sqlite_master.name AS _PFX_sqlite_master_name FROM test,sqlite_master WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
 func TestExpandFields(t *testing.T) {
 	stmt := "SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;"
 	fields := []fieldBinding{{

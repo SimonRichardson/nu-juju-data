@@ -15,9 +15,10 @@ type ReflectTag struct {
 }
 
 type ReflectField struct {
-	Name  string
-	Tag   ReflectTag
-	Value reflect.Value
+	Name        string
+	Tag         ReflectTag
+	Value       reflect.Value
+	Overlapping bool
 }
 
 type ReflectStruct struct {

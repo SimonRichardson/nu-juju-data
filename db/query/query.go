@@ -10,6 +10,9 @@ import (
 	"github.com/juju/errors"
 )
 
+// AliasPrefix is used to so we can decode the mappings from column name.
+const AliasPrefix = "_PFX_"
+
 // Hook is used to analyze the queries that are being queried.
 type Hook func(string)
 
@@ -45,15 +48,43 @@ func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 		if !entities[i].Ptr {
 			return Query{}, errors.Errorf("expected a pointer, not a value for %d of type %T", i, value)
 		}
-
 		names[i] = entities[i].Name
 	}
 
+	// Workout if any of the entities have overlapping fields.
 	return Query{
-		entities: entities,
+		entities: computeOverlappingFields(entities),
 		names:    names,
 		hook:     q.hook,
 	}, nil
+}
+
+func computeOverlappingFields(entities []ReflectStruct) []ReflectStruct {
+	// Don't create anything if we can never overlap.
+	if len(entities) <= 1 {
+		return entities
+	}
+
+	fields := make(map[string]bool)
+	for _, entity := range entities {
+		for _, field := range entity.FieldNames() {
+			if _, ok := fields[field]; ok {
+				fields[field] = true
+				continue
+			}
+			fields[field] = false
+		}
+	}
+
+	for _, entity := range entities {
+		for field, fieldStruct := range entity.Fields {
+			if val, ok := fields[field]; ok && val {
+				fieldStruct.Overlapping = true
+				entity.Fields[field] = fieldStruct
+			}
+		}
+	}
+	return entities
 }
 
 type Query struct {
@@ -99,8 +130,10 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 		args = append(args, input)
 	}
 
+	var fields []fieldBinding
 	if offset := indexOfFieldArgs(stmt); offset >= 0 {
-		fields, err := parseFields(stmt, offset)
+		var err error
+		fields, err = parseFields(stmt, offset)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -133,12 +166,33 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 	// to know where to locate that information, without a SQL AST.
 	columnar := make([]interface{}, len(columns))
 	for i, column := range columns {
+		var prefix string
+		if strings.HasPrefix(column, AliasPrefix) {
+			parts := strings.Split(column[len(AliasPrefix):], "_")
+			prefix = strings.Join(parts[:len(parts)-1], "_")
+			column = parts[len(parts)-1]
+		}
+
 		var found bool
 		for _, entity := range q.entities {
-			if _, ok := entity.Fields[column]; !ok {
+			field, ok := entity.Fields[column]
+			if !ok {
 				continue
 			}
-			columnar[i] = entity.Fields[column].Value.Addr().Interface()
+			if prefix != "" {
+				var bindingFound bool
+				for _, binding := range fields {
+					if binding.name == entity.Name && binding.prefix == prefix {
+						bindingFound = true
+						break
+					}
+				}
+				if !bindingFound {
+					continue
+				}
+			}
+
+			columnar[i] = field.Value.Addr().Interface()
 			found = true
 			break
 		}
@@ -435,15 +489,19 @@ func expandFields(stmt string, fields []fieldBinding, entities []ReflectStruct) 
 			}
 
 			// We've located the entity, now swap out all of it's field names.
-			fieldNames := entity.FieldNames()
-			names := make([]string, len(fieldNames))
-			for k, name := range fieldNames {
+			names := make([]string, 0, len(entity.Fields))
+			for name, entityField := range entity.Fields {
 				if field.prefix == "" {
-					names[k] = name
+					names = append(names, name)
 					continue
 				}
-				names[k] = field.prefix + "." + name
+				var alias string
+				if entityField.Overlapping {
+					alias = " AS " + AliasPrefix + field.prefix + "_" + name
+				}
+				names = append(names, field.prefix+"."+name+alias)
 			}
+			sort.Strings(names)
 			fieldList := strings.Join(names, ", ")
 			stmt = stmt[:offset+field.start] + fieldList + stmt[offset+field.end:]
 
