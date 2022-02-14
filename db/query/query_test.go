@@ -68,13 +68,27 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	tx, err := db.Begin()
 	assertNil(t, err)
 
-	err = Query{}.Query(tx, "SELECT name, age FROM test WHERE name=:name;", map[string]interface{}{
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person map[string]interface{}
+	getter, err := querier.ForOne(&person)
+	assertNil(t, err)
+
+	err = getter.Query(tx, "SELECT name, age FROM test WHERE name=:name;", map[string]interface{}{
 		"name": "fred",
 	})
 	assertNil(t, err)
 
 	err = tx.Commit()
 	assertNil(t, err)
+
+	expected := "SELECT age, name FROM test WHERE name=:name;"
+	assertEquals(t, processedStmt, expected)
 }
 
 func TestQueryWithStruct(t *testing.T) {
@@ -174,16 +188,18 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
 	assertEquals(t, record, Record{Name: "test"})
 
-	expected := "SELECT test.age, test.name AS _PFX_test_name, sqlite_master.name AS _PFX_sqlite_master_name FROM test,sqlite_master WHERE test.name=:name;"
+	expected := "SELECT test.age, test.name AS _pfx_test_sfx_name, sqlite_master.name AS _pfx_sqlite_master_sfx_name FROM test,sqlite_master WHERE test.name=:name;"
 	assertEquals(t, processedStmt, expected)
 }
 
 func TestExpandFields(t *testing.T) {
 	stmt := "SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;"
-	fields := []fieldBinding{{
-		name:  "Person",
-		start: 7,
-		end:   15,
+
+	fields := []recordBinding{{
+		name:   "Person",
+		start:  7,
+		end:    15,
+		prefix: "test",
 	}, {
 		name:  "Other",
 		start: 17,
@@ -193,6 +209,7 @@ func TestExpandFields(t *testing.T) {
 		start: 26,
 		end:   35,
 	}}
+
 	entities := []ReflectStruct{{
 		Name: "Person",
 		Fields: map[string]ReflectField{
@@ -212,9 +229,15 @@ func TestExpandFields(t *testing.T) {
 		},
 	}}
 
-	res, err := expandFields(stmt, fields, entities)
+	intersections := map[string]map[string]struct{}{
+		"Person": {
+			"name": struct{}{},
+		},
+	}
+
+	res, err := expandRecords(stmt, fields, entities, intersections)
 	assertNil(t, err)
 
-	expected := "SELECT age, name, x, y, z FROM test WHERE test.name=:name;"
+	expected := "SELECT test.age, test.name AS _pfx_test_sfx_name, x, y, z FROM test WHERE test.name=:name;"
 	assertEquals(t, res, expected)
 }

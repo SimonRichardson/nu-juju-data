@@ -9,16 +9,19 @@ import (
 	"github.com/juju/errors"
 )
 
+type ReflectInfo interface {
+	Kind() reflect.Kind
+}
+
 type ReflectTag struct {
 	Name      string
 	OmitEmpty bool
 }
 
 type ReflectField struct {
-	Name        string
-	Tag         ReflectTag
-	Value       reflect.Value
-	Overlapping bool
+	Name  string
+	Tag   ReflectTag
+	Value reflect.Value
 }
 
 type ReflectStruct struct {
