@@ -13,6 +13,14 @@ type ReflectInfo interface {
 	Kind() reflect.Kind
 }
 
+type ReflectValue struct {
+	Value reflect.Value
+}
+
+func (r ReflectValue) Kind() reflect.Kind {
+	return r.Value.Kind()
+}
+
 type ReflectTag struct {
 	Name      string
 	OmitEmpty bool
@@ -28,7 +36,10 @@ type ReflectStruct struct {
 	Name   string
 	Fields map[string]ReflectField
 	Value  reflect.Value
-	Ptr    bool
+}
+
+func (r ReflectStruct) Kind() reflect.Kind {
+	return r.Value.Kind()
 }
 
 // FieldNames returns the field names for a given type.
@@ -41,16 +52,21 @@ func (r ReflectStruct) FieldNames() []string {
 	return names
 }
 
-// Reflect parses a reflect.Value returning a ReflectStruct of fields and tags
+// Reflect parses a reflect.Value returning a ReflectInfo of fields and tags
 // for the reflect value.
-func Reflect(value reflect.Value) (ReflectStruct, error) {
+func Reflect(value reflect.Value) (ReflectInfo, error) {
 	// Dereference the pointer if it is one.
 	value = reflect.Indirect(value)
-	mustBe(value, reflect.Struct)
+	if value.Kind() != reflect.Struct {
+		return ReflectValue{
+			Value: value,
+		}, nil
+	}
 
 	refStruct := ReflectStruct{
 		Name:   value.Type().Name(),
 		Fields: make(map[string]ReflectField),
+		Value:  value,
 	}
 
 	typ := value.Type()
@@ -59,7 +75,7 @@ func Reflect(value reflect.Value) (ReflectStruct, error) {
 		rawTag := field.Tag.Get("db")
 		tag, err := parseTag(rawTag)
 		if err != nil {
-			return ReflectStruct{}, errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 
 		name := tag.Name
@@ -95,18 +111,6 @@ func parseTag(tag string) (ReflectTag, error) {
 		refTag.Name = options[0]
 	}
 	return refTag, nil
-}
-
-type kinder interface {
-	Kind() reflect.Kind
-}
-
-// mustBe checks a value against a kind, panicing with a reflect.ValueError
-// if the kind isn't that which is required.
-func mustBe(v kinder, expected reflect.Kind) {
-	if k := v.Kind(); k != expected {
-		panic(&reflect.ValueError{Method: methodName(), Kind: k})
-	}
 }
 
 // methodName returns the caller of the function calling methodName

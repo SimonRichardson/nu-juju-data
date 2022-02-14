@@ -43,41 +43,63 @@ func (q *Querier) Hook(hook Hook) {
 // It should be noted that the select can be cached and the query can be called
 // multiple times.
 func (q *Querier) ForOne(values ...interface{}) (Query, error) {
-	entities := make([]ReflectStruct, len(values))
-	names := make([]string, len(values))
+	entities := make([]ReflectInfo, len(values))
+
 	for i, value := range values {
 		var err error
 
 		if entities[i], err = q.reflect.Reflect(value); err != nil {
 			return Query{}, errors.Trace(err)
 		}
-		if !entities[i].Ptr {
-			return Query{}, errors.Errorf("expected a pointer, not a value for %d of type %T", i, value)
+
+		// Ensure that all the types are the same. This is a current
+		// restriction to reduce complications later on. Given enough time and
+		// energy we can implement this at a later date.
+		if i > 1 && entities[i-1].Kind() != entities[i].Kind() {
+			return Query{}, errors.Errorf("expected all input values to be of the same kind %q, got %q", entities[i-1].Kind(), entities[i].Kind())
 		}
-		names[i] = entities[i].Name
 	}
 
-	// Workout if any of the entities have overlapping fields.
-	return Query{
+	query := Query{
 		entities: entities,
-		names:    names,
 		hook:     q.hook,
-	}, nil
+	}
+	if len(values) == 0 {
+		query.executePlan = query.defaultScan
+		return query, nil
+	}
+
+	switch entities[0].Kind() {
+	case reflect.Struct:
+		structs := make([]ReflectStruct, len(values))
+		for i, entity := range entities {
+			structs[i] = entity.(ReflectStruct)
+		}
+
+		query.executePlan = func(tx *sql.Tx, stmt string, args []interface{}) error {
+			return query.structScan(tx, stmt, args, structs)
+		}
+
+	case reflect.Map:
+		if len(values) > 1 {
+			return Query{}, errors.Errorf("expected one map for query, got %d", len(values))
+		}
+		query.executePlan = func(tx *sql.Tx, stmt string, args []interface{}) error {
+			return query.mapScan(tx, stmt, args, entities[0].(ReflectValue))
+		}
+
+	default:
+		query.executePlan = query.defaultScan
+	}
+	return query, nil
 }
 
 type Query struct {
-	entities []ReflectStruct
-	names    []string
-	hook     Hook
+	entities    []ReflectInfo
+	hook        Hook
+	executePlan func(*sql.Tx, string, []interface{}) error
 }
 
-// 1. If the query contains named arguments, extract all the names.
-// 2. If the query contains names:
-//    a. Use the first argument as the source of the names.
-//    b. If the first argument is not a map or a struct{} then error out.
-//    c. If nothing matches error out to be helpful.
-//    d. Supply the additional arguments to the query.
-// 3. No names with in the query, pass all arguments to the query.
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 	var names []nameBinding
 	if offset := indexOfNamedArgs(stmt); offset >= 0 {
@@ -108,6 +130,71 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 		args = append(args, input)
 	}
 
+	return q.executePlan(tx, stmt, args)
+}
+
+func (q Query) defaultScan(tx *sql.Tx, stmt string, args []interface{}) error {
+	rows, columns, err := q.query(tx, stmt, args)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer rows.Close()
+
+	if len(columns) != len(q.entities) {
+		return errors.Errorf("number of entities does not match column length %d, got %d", len(columns), len(q.entities))
+	}
+
+	columnar := make([]interface{}, len(columns))
+	for i := range columns {
+		if _, ok := q.entities[i].(ReflectStruct); ok {
+			return errors.NotSupportedf("mixed entities")
+		}
+
+		refValue := q.entities[i].(ReflectValue)
+		columnar[i] = refValue.Value.Addr().Interface()
+	}
+
+	return q.scan(rows, columnar)
+}
+
+func (q Query) mapScan(tx *sql.Tx, stmt string, args []interface{}, entity ReflectValue) error {
+	rows, columns, err := q.query(tx, stmt, args)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer rows.Close()
+
+	columnar := make([]interface{}, len(columns))
+	for i, column := range columns {
+		columnar[i] = zeroScanType(column.DatabaseTypeName())
+	}
+	if err := q.scan(rows, columnar); err != nil {
+		return errors.Trace(err)
+	}
+
+	for i, column := range columns {
+		columnName := column.Name()
+		colRef := reflect.ValueOf(columnName)
+		entity.Value.SetMapIndex(colRef, reflect.Indirect(reflect.ValueOf(columnar[i])))
+	}
+
+	return nil
+}
+
+func zeroScanType(t string) interface{} {
+	switch t {
+	case "TEXT", "VARCHAR":
+		var a string
+		return &a
+	case "INTEGER", "BIGINT":
+		var a int64
+		return &a
+	default:
+		panic("unexpected type: " + t)
+	}
+}
+
+func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities []ReflectStruct) error {
 	var fields []recordBinding
 	if offset := indexOfRecordArgs(stmt); offset >= 0 {
 		var err error
@@ -116,31 +203,20 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 			return errors.Trace(err)
 		}
 
-		// Locate any possible entity
-		intersections := fieldIntersections(q.entities)
+		// Workout if any of the entities have overlapping fields.
+		intersections := fieldIntersections(entities)
 
-		stmt, err = expandRecords(stmt, fields, q.entities, intersections)
+		stmt, err = expandRecords(stmt, fields, entities, intersections)
 		if err != nil {
 			return errors.Trace(err)
 		}
 	}
 
-	// Call the hook, before making the query.
-	if q.hook != nil {
-		q.hook(stmt)
-	}
-
-	rows, err := tx.Query(stmt, args...)
+	rows, columns, err := q.query(tx, stmt, args)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	defer rows.Close()
-
-	// Grab the columns of the rows returned.
-	columns, err := rows.Columns()
-	if err != nil {
-		return errors.Trace(err)
-	}
 
 	// Traverse the entities available, this is where it becomes very difficult
 	// for use. As the sql library doesn't provide the namespaced columns for
@@ -148,16 +224,18 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 	// to know where to locate that information, without a SQL AST.
 	columnar := make([]interface{}, len(columns))
 	for i, column := range columns {
+		columnName := column.Name()
+
 		var prefix string
-		if strings.HasPrefix(column, AliasPrefix) {
-			parts := strings.Split(column[len(AliasPrefix):], AliasSeparator)
+		if strings.HasPrefix(columnName, AliasPrefix) {
+			parts := strings.Split(columnName[len(AliasPrefix):], AliasSeparator)
 			prefix = parts[0]
-			column = parts[1]
+			columnName = parts[1]
 		}
 
 		var found bool
-		for _, entity := range q.entities {
-			field, ok := entity.Fields[column]
+		for _, entity := range entities {
+			field, ok := entity.Fields[columnName]
 			if !ok {
 				continue
 			}
@@ -179,16 +257,51 @@ func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 			break
 		}
 		if !found {
-			return errors.Errorf("missing destination name %q in types %v", column, q.names)
+			return errors.Errorf("missing destination name %q in types %v", column.Name(), entityNames(q.entities))
 		}
 	}
+
+	return q.scan(rows, columnar)
+}
+
+func (q Query) query(tx *sql.Tx, stmt string, args []interface{}) (*sql.Rows, []*sql.ColumnType, error) {
+	// Call the hook, before making the query.
+	if q.hook != nil {
+		q.hook(stmt)
+	}
+
+	rows, err := tx.Query(stmt, args...)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+
+	// Grab the columns of the rows returned.
+	columns, err := rows.ColumnTypes()
+	if err != nil {
+		rows.Close()
+		return nil, nil, errors.Trace(err)
+	}
+	return rows, columns, nil
+}
+
+func (q Query) scan(rows *sql.Rows, args []interface{}) error {
 	for rows.Next() {
-		if err := rows.Scan(columnar...); err != nil {
+		if err := rows.Scan(args...); err != nil {
 			return errors.Trace(err)
 		}
 	}
 
 	return errors.Trace(rows.Err())
+}
+
+func entityNames(entities []ReflectInfo) []string {
+	var names []string
+	for _, entity := range entities {
+		if rs, ok := entity.(ReflectStruct); ok {
+			names = append(names, rs.Name)
+		}
+	}
+	return names
 }
 
 type bindCharPredicate func(rune) bool
@@ -327,15 +440,20 @@ func constructNamedArgs(arg interface{}, names []nameBinding) ([]sql.NamedArg, e
 		return nameValues, nil
 
 	case k == reflect.Array || k == reflect.Slice:
-		return nil, errors.NotSupportedf("%q not supported", k.String())
+		return nil, errors.NotSupportedf("%q", k.String())
 	default:
 		ref, err := Reflect(reflect.ValueOf(arg))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
+		refStruct, ok := ref.(ReflectStruct)
+		if !ok {
+			return nil, errors.NotSupportedf("%q", k)
+		}
+
 		nameValues := make([]sql.NamedArg, len(names))
 		for k, name := range names {
-			if field, ok := ref.Fields[name.name]; ok {
+			if field, ok := refStruct.Fields[name.name]; ok {
 				fieldValue := field.Value.Interface()
 				nameValues[k] = sql.Named(name.name, fieldValue)
 				continue

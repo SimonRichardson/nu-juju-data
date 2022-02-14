@@ -75,7 +75,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		processedStmt = stmt
 	})
 
-	var person map[string]interface{}
+	person := make(map[string]interface{})
 	getter, err := querier.ForOne(&person)
 	assertNil(t, err)
 
@@ -87,7 +87,96 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	err = tx.Commit()
 	assertNil(t, err)
 
-	expected := "SELECT age, name FROM test WHERE name=:name;"
+	assertEquals(t, person, map[string]interface{}{
+		"name": "fred",
+		"age":  int64(21),
+	})
+
+	expected := "SELECT name, age FROM test WHERE name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestQueryWithScalar(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var count int
+	getter, err := querier.ForOne(&count)
+	assertNil(t, err)
+
+	err = getter.Query(tx, "SELECT COUNT(name) FROM test WHERE name=:name;", map[string]interface{}{
+		"name": "fred",
+	})
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+
+	assertEquals(t, count, 1)
+
+	expected := "SELECT COUNT(name) FROM test WHERE name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestQueryWithScalarAndName(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var count int
+	var name string
+	getter, err := querier.ForOne(&count, &name)
+	assertNil(t, err)
+
+	err = getter.Query(tx, "SELECT COUNT(name), name FROM test WHERE name=:name;", map[string]interface{}{
+		"name": "fred",
+	})
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+
+	assertEquals(t, count, 1)
+	assertEquals(t, name, "fred")
+
+	expected := "SELECT COUNT(name), name FROM test WHERE name=:name;"
 	assertEquals(t, processedStmt, expected)
 }
 
