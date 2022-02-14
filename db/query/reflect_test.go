@@ -2,6 +2,7 @@ package query
 
 import (
 	"reflect"
+	"runtime/debug"
 	"testing"
 
 	"github.com/juju/errors"
@@ -25,6 +26,7 @@ func TestReflect(t *testing.T) {
 func assertNil(t *testing.T, err error) {
 	if err != nil {
 		t.Log(errors.ErrorStack(err))
+		t.Log(string(debug.Stack()))
 		t.Fatal(err)
 	}
 }

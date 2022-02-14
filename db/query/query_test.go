@@ -281,6 +281,185 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	assertEquals(t, processedStmt, expected)
 }
 
+func TestQueryJoinWithStruct(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE people(
+	name     TEXT,
+	age      INTEGER,
+	location INTEGER
+);
+CREATE TABLE location(
+	id   INTEGER,
+	city TEXT
+);
+INSERT INTO people(name, age, location) values ("fred", 21, 1), ("frank", 42, 2), ("jane", 23, 1);
+INSERT INTO location(id, city) values (1, "london"), (2, "paris");
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	arg := struct {
+		Name       string `db:"name"`
+		LocationID int    `db:"loc_id"`
+	}{
+		Name:       "fred",
+		LocationID: 1,
+	}
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+		City string `db:"city"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	getter, err := querier.ForOne(&person)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {Person} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, arg)
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+	assertEquals(t, person, Person{Name: "fred", Age: 21, City: "london"})
+
+	expected := "SELECT age, city, name FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestQueryJoinWithMultipleStructs(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE people(
+	name     TEXT,
+	age      INTEGER,
+	location INTEGER
+);
+CREATE TABLE location(
+	id   INTEGER,
+	city TEXT
+);
+INSERT INTO people(name, age, location) values ("fred", 21, 1), ("frank", 42, 2), ("jane", 23, 1);
+INSERT INTO location(id, city) values (1, "london"), (2, "paris");
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	arg := struct {
+		Name       string `db:"name"`
+		LocationID int    `db:"loc_id"`
+	}{
+		Name:       "fred",
+		LocationID: 1,
+	}
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+	type Location struct {
+		City string `db:"city"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	var location Location
+	getter, err := querier.ForOne(&person, &location)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {Person}, {Location} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, arg)
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+	assertEquals(t, location, Location{City: "london"})
+
+	expected := "SELECT age, name, city FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestQueryJoinWithMultiplePrefixStructs(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE people(
+	name     TEXT,
+	age      INTEGER,
+	location INTEGER
+);
+CREATE TABLE location(
+	id   INTEGER,
+	city TEXT
+);
+INSERT INTO people(name, age, location) values ("fred", 21, 1), ("frank", 42, 2), ("jane", 23, 1);
+INSERT INTO location(id, city) values (1, "london"), (2, "paris");
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	arg := struct {
+		Name       string `db:"name"`
+		LocationID int    `db:"loc_id"`
+	}{
+		Name:       "fred",
+		LocationID: 1,
+	}
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+	type Location struct {
+		City string `db:"city"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	var location Location
+	getter, err := querier.ForOne(&person, &location)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {Person "people"}, {Location "location"} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, arg)
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+	assertEquals(t, location, Location{City: "london"})
+
+	expected := "SELECT people.age, people.name, location.city FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
 func TestExpandFields(t *testing.T) {
 	stmt := "SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;"
 

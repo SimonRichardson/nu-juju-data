@@ -307,7 +307,7 @@ func entityNames(entities []ReflectInfo) []string {
 type bindCharPredicate func(rune) bool
 
 func alphaNumeric(a rune) bool {
-	return unicode.IsLetter(a) || unicode.IsDigit(a) || unicode.IsNumber(a)
+	return unicode.IsLetter(a) || unicode.IsDigit(a) || unicode.IsNumber(a) || a == '_'
 }
 
 func numeric(a rune) bool {
