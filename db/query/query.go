@@ -94,6 +94,47 @@ func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 	return query, nil
 }
 
+// ForMany creates a query based on the slice input.
+// It should be noted that the select can be cached and the query can be called
+// multiple times.
+func (q *Querier) ForMany(value interface{}) (Query, error) {
+	entity, err := q.reflect.Reflect(value)
+	if err != nil {
+		return Query{}, errors.Trace(err)
+	}
+
+	query := Query{
+		entities: []ReflectInfo{entity},
+		hook:     q.hook,
+	}
+
+	switch entity.Kind() {
+	case reflect.Slice:
+		// This isn't nice at all, but we need to locate the base type of the
+		// slice so we can iterate over it.
+		refValue := entity.(ReflectValue)
+		base := refValue.Value.Type().Elem()
+		virtual := reflect.New(base)
+
+		// Grab the base type reflection.
+		element, err := q.reflect.Reflect(virtual.Interface())
+		if err != nil {
+			return Query{}, errors.Errorf("expected slice but got %q", entity.Kind())
+		}
+		elementRefStruct, ok := element.(ReflectStruct)
+		if !ok {
+			return Query{}, errors.Errorf("expected slice T to be struct")
+		}
+
+		query.executePlan = func(tx *sql.Tx, stmt string, args []interface{}) error {
+			return query.sliceStructScan(tx, stmt, args, refValue, elementRefStruct)
+		}
+	default:
+		return Query{}, errors.Errorf("expected slice but got %q", entity.Kind())
+	}
+	return query, nil
+}
+
 type Query struct {
 	entities    []ReflectInfo
 	hook        Hook
@@ -101,6 +142,9 @@ type Query struct {
 }
 
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
+	// TODO: Based on the incoming statement and the entities from Querier,
+	// we could just cache that information and run that without doing all
+	// of the following.
 	var names []nameBinding
 	if offset := indexOfNamedArgs(stmt); offset >= 0 {
 		var err error
@@ -154,7 +198,7 @@ func (q Query) defaultScan(tx *sql.Tx, stmt string, args []interface{}) error {
 		columnar[i] = refValue.Value.Addr().Interface()
 	}
 
-	return q.scan(rows, columnar)
+	return q.scanOne(rows, columnar)
 }
 
 func (q Query) mapScan(tx *sql.Tx, stmt string, args []interface{}, entity ReflectValue) error {
@@ -168,7 +212,7 @@ func (q Query) mapScan(tx *sql.Tx, stmt string, args []interface{}, entity Refle
 	for i, column := range columns {
 		columnar[i] = zeroScanType(column.DatabaseTypeName())
 	}
-	if err := q.scan(rows, columnar); err != nil {
+	if err := q.scanOne(rows, columnar); err != nil {
 		return errors.Trace(err)
 	}
 
@@ -182,25 +226,34 @@ func (q Query) mapScan(tx *sql.Tx, stmt string, args []interface{}, entity Refle
 }
 
 func zeroScanType(t string) interface{} {
-	switch t {
-	case "TEXT", "VARCHAR":
+	switch strings.ToUpper(t) {
+	case "TEXT":
 		var a string
 		return &a
-	case "INTEGER", "BIGINT":
+	case "INTEGER":
 		var a int64
+		return &a
+	case "BOOL":
+		var a bool
+		return &a
+	case "REAL", "NUMERIC":
+		var a float64
+		return &a
+	case "BLOB":
+		var a []byte
 		return &a
 	default:
 		panic("unexpected type: " + t)
 	}
 }
 
-func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities []ReflectStruct) error {
+func (q Query) compileStatement(stmt string, entities []ReflectStruct) (string, []recordBinding, error) {
 	var fields []recordBinding
 	if offset := indexOfRecordArgs(stmt); offset >= 0 {
 		var err error
 		fields, err = parseRecords(stmt, offset)
 		if err != nil {
-			return errors.Trace(err)
+			return "", nil, errors.Trace(err)
 		}
 
 		// Workout if any of the entities have overlapping fields.
@@ -208,16 +261,62 @@ func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities 
 
 		stmt, err = expandRecords(stmt, fields, entities, intersections)
 		if err != nil {
-			return errors.Trace(err)
+			return "", nil, errors.Trace(err)
 		}
 	}
+	return stmt, fields, nil
+}
 
-	rows, columns, err := q.query(tx, stmt, args)
+func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities []ReflectStruct) error {
+	compiledStmt, fields, err := q.compileStatement(stmt, entities)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	rows, columns, err := q.query(tx, compiledStmt, args)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	defer rows.Close()
 
+	columnar, err := q.structMapping(columns, entities, fields)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	return q.scanOne(rows, columnar)
+}
+
+func (q Query) sliceStructScan(tx *sql.Tx, stmt string, args []interface{}, slice ReflectValue, element ReflectStruct) error {
+	compiledStmt, fields, err := q.compileStatement(stmt, []ReflectStruct{element})
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	rows, columns, err := q.query(tx, compiledStmt, args)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		refStruct := element
+
+		columnar, err := q.structMapping(columns, []ReflectStruct{refStruct}, fields)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		if err := rows.Scan(columnar...); err != nil {
+			return errors.Trace(err)
+		}
+
+		slice.Value.Set(reflect.Append(slice.Value, refStruct.Value))
+	}
+	return errors.Trace(rows.Err())
+}
+
+func (q Query) structMapping(columns []*sql.ColumnType, entities []ReflectStruct, fields []recordBinding) ([]interface{}, error) {
 	// Traverse the entities available, this is where it becomes very difficult
 	// for use. As the sql library doesn't provide the namespaced columns for
 	// us to inspect, so if you have overlapping column names it becomes hard
@@ -257,11 +356,10 @@ func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities 
 			break
 		}
 		if !found {
-			return errors.Errorf("missing destination name %q in types %v", column.Name(), entityNames(q.entities))
+			return nil, errors.Errorf("missing destination name %q in types %v", column.Name(), entityNames(q.entities))
 		}
 	}
-
-	return q.scan(rows, columnar)
+	return columnar, nil
 }
 
 func (q Query) query(tx *sql.Tx, stmt string, args []interface{}) (*sql.Rows, []*sql.ColumnType, error) {
@@ -284,7 +382,7 @@ func (q Query) query(tx *sql.Tx, stmt string, args []interface{}) (*sql.Rows, []
 	return rows, columns, nil
 }
 
-func (q Query) scan(rows *sql.Rows, args []interface{}) error {
+func (q Query) scanOne(rows *sql.Rows, args []interface{}) error {
 	for rows.Next() {
 		if err := rows.Scan(args...); err != nil {
 			return errors.Trace(err)

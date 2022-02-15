@@ -460,6 +460,57 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 	assertEquals(t, processedStmt, expected)
 }
 
+func TestQueryWithSlice(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	arg := struct {
+		Age int `db:"age"`
+	}{
+		Age: 20,
+	}
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var persons []Person
+	getter, err := querier.ForMany(&persons)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.age>:age;`, arg)
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+	assertEquals(t, persons, []Person{
+		{Name: "fred", Age: 21},
+		{Name: "frank", Age: 42},
+	})
+
+	expected := "SELECT test.age, test.name FROM test WHERE test.age>:age;"
+	assertEquals(t, processedStmt, expected)
+}
+
 func TestParseRecords(t *testing.T) {
 	stmt := `SELECT {test INTO Person}, {'foo' INTO Foo}, {"other" INTO Other}, {Another} FROM test WHERE test.name=:name;`
 	bindings, err := parseRecords(stmt, indexOfRecordArgs(stmt))
