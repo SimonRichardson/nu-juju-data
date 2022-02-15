@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/juju/errors"
@@ -22,14 +23,16 @@ const (
 type Hook func(string)
 
 type Querier struct {
-	reflect *ReflectCache
-	hook    Hook
+	reflect   *ReflectCache
+	hook      Hook
+	stmtCache *statementCache
 }
 
 // NewQuerier creates a new querier for selecting queries.
 func NewQuerier() *Querier {
 	return &Querier{
-		reflect: NewReflectCache(),
+		reflect:   NewReflectCache(),
+		stmtCache: newStatementCache(),
 	}
 }
 
@@ -61,8 +64,9 @@ func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 	}
 
 	query := Query{
-		entities: entities,
-		hook:     q.hook,
+		entities:  entities,
+		hook:      q.hook,
+		stmtCache: q.stmtCache,
 	}
 	if len(values) == 0 {
 		query.executePlan = query.defaultScan
@@ -104,8 +108,9 @@ func (q *Querier) ForMany(value interface{}) (Query, error) {
 	}
 
 	query := Query{
-		entities: []ReflectInfo{entity},
-		hook:     q.hook,
+		entities:  []ReflectInfo{entity},
+		hook:      q.hook,
+		stmtCache: q.stmtCache,
 	}
 
 	switch entity.Kind() {
@@ -139,12 +144,10 @@ type Query struct {
 	entities    []ReflectInfo
 	hook        Hook
 	executePlan func(*sql.Tx, string, []interface{}) error
+	stmtCache   *statementCache
 }
 
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
-	// TODO: Based on the incoming statement and the entities from Querier,
-	// we could just cache that information and run that without doing all
-	// of the following.
 	var names []nameBinding
 	if offset := indexOfNamedArgs(stmt); offset >= 0 {
 		var err error
@@ -268,9 +271,19 @@ func (q Query) compileStatement(stmt string, entities []ReflectStruct) (string, 
 }
 
 func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities []ReflectStruct) error {
-	compiledStmt, fields, err := q.compileStatement(stmt, entities)
-	if err != nil {
-		return errors.Trace(err)
+	var (
+		compiledStmt string
+		fields       []recordBinding
+	)
+	if cached, ok := q.stmtCache.Get(stmt); ok {
+		compiledStmt = cached.stmt
+		fields = cached.fields
+	} else {
+		var err error
+		compiledStmt, fields, err = q.compileStatement(stmt, entities)
+		if err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	rows, columns, err := q.query(tx, compiledStmt, args)
@@ -284,7 +297,19 @@ func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities 
 		return errors.Trace(err)
 	}
 
-	return q.scanOne(rows, columnar)
+	if err := q.scanOne(rows, columnar); err != nil {
+		return errors.Trace(err)
+	}
+
+	// Only cache the statement if it differs from the original.
+	if stmt != compiledStmt {
+		q.stmtCache.Set(stmt, cachedStmt{
+			stmt:   compiledStmt,
+			fields: fields,
+		})
+	}
+
+	return nil
 }
 
 func (q Query) sliceStructScan(tx *sql.Tx, stmt string, args []interface{}, slice ReflectValue, element ReflectStruct) error {
@@ -745,4 +770,34 @@ func fieldIntersections(entities []ReflectStruct) map[string]map[string]struct{}
 	}
 
 	return results
+}
+
+type cachedStmt struct {
+	stmt   string
+	fields []recordBinding
+}
+type statementCache struct {
+	mutex sync.Mutex
+	cache map[string]cachedStmt
+}
+
+func newStatementCache() *statementCache {
+	return &statementCache{
+		cache: make(map[string]cachedStmt),
+	}
+}
+
+func (c *statementCache) Get(stmt string) (cachedStmt, bool) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	computed, ok := c.cache[stmt]
+	return computed, ok
+}
+
+func (c *statementCache) Set(stmt string, computed cachedStmt) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.cache[stmt] = computed
 }

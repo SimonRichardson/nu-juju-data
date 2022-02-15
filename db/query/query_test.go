@@ -228,6 +228,60 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	assertEquals(t, processedStmt, expected)
 }
 
+func TestQueryWithStructUsesCache(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	assertNil(t, err)
+
+	_, err = db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	tx, err := db.Begin()
+	assertNil(t, err)
+
+	arg := struct {
+		Name string `db:"name"`
+	}{
+		Name: "fred",
+	}
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	getter, err := querier.ForOne(&person)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, arg)
+	assertNil(t, err)
+
+	err = getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, arg)
+	assertNil(t, err)
+
+	err = tx.Commit()
+	assertNil(t, err)
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+
+	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+
+	_, ok := querier.stmtCache.Get(`SELECT {test INTO Person} FROM test WHERE test.name=:name;`)
+	assertEquals(t, ok, true)
+}
+
 func TestQueryWithStructOverlapping(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assertNil(t, err)
