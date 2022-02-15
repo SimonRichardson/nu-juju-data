@@ -52,25 +52,6 @@ func TestConstructNamedArgsWithStruct(t *testing.T) {
 	})
 }
 
-func setupDB(t *testing.T) *sql.DB {
-	db, err := sql.Open("sqlite3", ":memory:")
-	assertNil(t, err)
-	return db
-}
-
-func runTx(t *testing.T, db *sql.DB, fn func(*sql.Tx) error) {
-	tx, err := db.Begin()
-	assertNil(t, err)
-
-	if err := fn(tx); err != nil {
-		tx.Rollback()
-		assertNil(t, err)
-	}
-
-	err = tx.Commit()
-	assertNil(t, err)
-}
-
 func TestQueryWithMap(t *testing.T) {
 	db := setupDB(t)
 
@@ -277,6 +258,61 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	assertEquals(t, ok, true)
 }
 
+func TestQueryWithStructUsesCacheOverNumerousTx(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, struct {
+			Name string `db:"name"`
+		}{
+			Name: "fred",
+		})
+	})
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, struct {
+			Name string `db:"name"`
+		}{
+			Name: "fred",
+		})
+	})
+
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+
+	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+
+	_, ok := querier.stmtCache.Get(`SELECT {test INTO Person} FROM test WHERE test.name=:name;`)
+	assertEquals(t, ok, true)
+}
+
 func TestQueryWithStructOverlapping(t *testing.T) {
 	db := setupDB(t)
 
@@ -361,7 +397,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 		getter, err := querier.ForOne(&person)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {Person} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, struct {
+		return getter.Query(tx, `SELECT {Person} FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name;`, struct {
 			Name       string `db:"name"`
 			LocationID int    `db:"loc_id"`
 		}{
@@ -371,7 +407,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 	})
 	assertEquals(t, person, Person{Name: "fred", Age: 21, City: "london"})
 
-	expected := "SELECT age, city, name FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;"
+	expected := "SELECT age, city, name FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name;"
 	assertEquals(t, processedStmt, expected)
 }
 
