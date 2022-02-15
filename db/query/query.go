@@ -32,6 +32,7 @@ type Querier struct {
 func NewQuerier() *Querier {
 	return &Querier{
 		reflect:   NewReflectCache(),
+		hook:      func(s string) {},
 		stmtCache: newStatementCache(),
 	}
 }
@@ -138,6 +139,16 @@ func (q *Querier) ForMany(value interface{}) (Query, error) {
 		return Query{}, errors.Errorf("expected slice but got %q", entity.Kind())
 	}
 	return query, nil
+}
+
+// Copy returns a new Querier with a new hook and statement cache, but keeping
+// the existing reflect cache..
+func (q *Querier) Copy() *Querier {
+	return &Querier{
+		reflect:   q.reflect,
+		hook:      func(s string) {},
+		stmtCache: newStatementCache(),
+	}
 }
 
 type Query struct {
