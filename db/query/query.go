@@ -503,8 +503,9 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 			return records, nil
 		}
 
-		var name string
-		var prefix string
+		// Parse the Record syntax `{Record}` or optionally `{test INTO Record}`
+		var record string
+		quotes := make(map[rune]int)
 	inner:
 		for i = i + 1; i < len(stmt); i++ {
 			char := rune(stmt[i])
@@ -512,20 +513,11 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 			switch {
 			case unicode.IsLetter(char) || unicode.IsSpace(char):
 				fallthrough
-
-			case len(name) > 0 && unicode.IsDigit(char):
-				fallthrough
-
 			case char == '_':
-				name += string(char)
-
+				record += string(char)
 			case char == '"' || char == '\'':
-				var err error
-				prefix, i, err = parsePrefixName(stmt, i+1, char)
-				if err != nil {
-					return nil, errors.Trace(err)
-				}
-
+				quotes[char]++
+				continue
 			case char == '}':
 				break inner
 
@@ -533,6 +525,25 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 				return nil, errors.Errorf("unexpected struct name in statement")
 			}
 		}
+
+		var name, prefix string
+		parts := strings.Split(strings.TrimSpace(record), " ")
+		if num := len(parts); num == 1 {
+			name = parts[0]
+		} else if num == 3 && strings.ToLower(parts[1]) == "into" {
+			prefix = parts[0]
+			name = parts[2]
+		} else {
+			return nil, errors.Errorf("unexpected record statement %q", record)
+		}
+
+		// This is a very basic algorithm.
+		for char, amount := range quotes {
+			if amount%2 != 0 {
+				return nil, errors.Errorf("missing quote %q terminator for record statement %q", string(char), record)
+			}
+		}
+
 		records = append(records, recordBinding{
 			name:   strings.TrimSpace(name),
 			prefix: prefix,
@@ -555,27 +566,6 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 		i = offset - 1
 	}
 	return records, nil
-}
-
-func parsePrefixName(stmt string, i int, closer rune) (string, int, error) {
-	var prefix string
-loop:
-	for ; i < len(stmt); i++ {
-		char := rune(stmt[i])
-		switch {
-		case unicode.IsLetter(char):
-			fallthrough
-		case len(prefix) > 0 && unicode.IsDigit(char):
-			fallthrough
-		case char == '_':
-			prefix += string(char)
-		case char == closer:
-			break loop
-		default:
-			return "", -1, errors.Errorf("unexpected field prefix starting at %q", stmt)
-		}
-	}
-	return prefix, i, nil
 }
 
 func expandRecords(stmt string, records []recordBinding, entities []ReflectStruct, intersections map[string]map[string]struct{}) (string, error) {

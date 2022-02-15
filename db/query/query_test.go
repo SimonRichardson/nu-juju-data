@@ -217,7 +217,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	getter, err := querier.ForOne(&person)
 	assertNil(t, err)
 
-	err = getter.Query(tx, `SELECT {Person "test"} FROM test WHERE test.name=:name;`, arg)
+	err = getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, arg)
 	assertNil(t, err)
 
 	err = tx.Commit()
@@ -269,7 +269,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	getter, err := querier.ForOne(&person, &record)
 	assertNil(t, err)
 
-	err = getter.Query(tx, `SELECT {Person "test"}, {Record "sqlite_master"} FROM test,sqlite_master WHERE test.name=:name;`, arg)
+	err = getter.Query(tx, `SELECT {"test" INTO Person}, {"sqlite_master" INTO Record} FROM test,sqlite_master WHERE test.name=:name;`, arg)
 	assertNil(t, err)
 
 	err = tx.Commit()
@@ -448,7 +448,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 	getter, err := querier.ForOne(&person, &location)
 	assertNil(t, err)
 
-	err = getter.Query(tx, `SELECT {Person "people"}, {Location "location"} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, arg)
+	err = getter.Query(tx, `SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, arg)
 	assertNil(t, err)
 
 	err = tx.Commit()
@@ -460,8 +460,53 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 	assertEquals(t, processedStmt, expected)
 }
 
+func TestParseRecords(t *testing.T) {
+	stmt := `SELECT {test INTO Person}, {'foo' INTO Foo}, {"other" INTO Other}, {Another} FROM test WHERE test.name=:name;`
+	bindings, err := parseRecords(stmt, indexOfRecordArgs(stmt))
+	assertNil(t, err)
+	assertEquals(t, bindings, []recordBinding{{
+		name:   "Person",
+		prefix: "test",
+		start:  7,
+		end:    25,
+	}, {
+		name:   "Foo",
+		prefix: "foo",
+		start:  27,
+		end:    43,
+	}, {
+		name:   "Other",
+		prefix: "other",
+		start:  45,
+		end:    65,
+	}, {
+		name:   "Another",
+		prefix: "",
+		start:  67,
+		end:    76,
+	}})
+}
+
+func TestParseRecordsErrorsMissingINTO(t *testing.T) {
+	stmt := `SELECT {test Person} FROM test WHERE test.name=:name;`
+	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
+	assertEquals(t, err.Error(), `unexpected record statement "test Person"`)
+}
+
+func TestParseRecordsErrorsMissingMatchingQuote(t *testing.T) {
+	stmt := `SELECT {'test INTO Person} FROM test WHERE test.name=:name;`
+	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
+	assertEquals(t, err.Error(), `missing quote "'" terminator for record statement "test INTO Person"`)
+}
+
+func TestParseRecordsErrorsTooMuchInformation(t *testing.T) {
+	stmt := `SELECT {test INTO Person AS} FROM test WHERE test.name=:name;`
+	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
+	assertEquals(t, err.Error(), `unexpected record statement "test INTO Person AS"`)
+}
+
 func TestExpandFields(t *testing.T) {
-	stmt := "SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;"
+	stmt := `SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;`
 
 	fields := []recordBinding{{
 		name:   "Person",
