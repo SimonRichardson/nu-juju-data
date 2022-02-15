@@ -47,33 +47,23 @@ func (q *Querier) Hook(hook Hook) {
 // It should be noted that the select can be cached and the query can be called
 // multiple times.
 func (q *Querier) ForOne(values ...interface{}) (Query, error) {
-	entities := make([]ReflectInfo, len(values))
-
-	for i, value := range values {
-		var err error
-
-		if entities[i], err = q.reflect.Reflect(value); err != nil {
-			return Query{}, errors.Trace(err)
-		}
-
-		// Ensure that all the types are the same. This is a current
-		// restriction to reduce complications later on. Given enough time and
-		// energy we can implement this at a later date.
-		if i > 1 && entities[i-1].Kind() != entities[i].Kind() {
-			return Query{}, errors.Errorf("expected all input values to be of the same kind %q, got %q", entities[i-1].Kind(), entities[i].Kind())
-		}
+	entities, err := q.reflectValues(values...)
+	if err != nil {
+		return Query{}, nil
 	}
-
 	query := Query{
 		entities:  entities,
 		hook:      q.hook,
 		stmtCache: q.stmtCache,
+		reflect:   q.reflect,
 	}
 	if len(values) == 0 {
 		query.executePlan = query.defaultScan
 		return query, nil
 	}
 
+	// We can expect that all entity types are homogeneous as there is a guard
+	// in reflectValues method.
 	switch entities[0].Kind() {
 	case reflect.Struct:
 		structs := make([]ReflectStruct, len(values))
@@ -99,46 +89,85 @@ func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 	return query, nil
 }
 
+type reflectSlice struct {
+	slice   ReflectValue
+	element ReflectStruct
+}
+
 // ForMany creates a query based on the slice input.
 // It should be noted that the select can be cached and the query can be called
 // multiple times.
-func (q *Querier) ForMany(value interface{}) (Query, error) {
-	entity, err := q.reflect.Reflect(value)
+func (q *Querier) ForMany(values ...interface{}) (Query, error) {
+	if len(values) == 0 {
+		return Query{}, errors.Errorf("expected at least one argument")
+	}
+
+	entities, err := q.reflectValues(values...)
 	if err != nil {
-		return Query{}, errors.Trace(err)
+		return Query{}, nil
 	}
 
 	query := Query{
-		entities:  []ReflectInfo{entity},
+		entities:  entities,
 		hook:      q.hook,
 		stmtCache: q.stmtCache,
+		reflect:   q.reflect,
 	}
 
-	switch entity.Kind() {
-	case reflect.Slice:
-		// This isn't nice at all, but we need to locate the base type of the
-		// slice so we can iterate over it.
-		refValue := entity.(ReflectValue)
-		base := refValue.Value.Type().Elem()
-		virtual := reflect.New(base)
+	refSlice := make([]reflectSlice, len(entities))
+	for i, entity := range entities {
+		switch entity.Kind() {
+		case reflect.Slice:
+			// This isn't nice at all, but we need to locate the base type of the
+			// slice so we can iterate over it.
+			refValue := entity.(ReflectValue)
+			base := refValue.Value.Type().Elem()
+			virtual := reflect.New(base)
 
-		// Grab the base type reflection.
-		element, err := q.reflect.Reflect(virtual.Interface())
-		if err != nil {
+			// Grab the base type reflection.
+			element, err := q.reflect.Reflect(virtual.Interface())
+			if err != nil {
+				return Query{}, errors.Errorf("expected slice but got %q", entity.Kind())
+			}
+			elementRefStruct, ok := element.(ReflectStruct)
+			if !ok {
+				return Query{}, errors.Errorf("expected slice T to be struct")
+			}
+
+			refSlice[i] = reflectSlice{
+				slice:   refValue,
+				element: elementRefStruct,
+			}
+
+		default:
 			return Query{}, errors.Errorf("expected slice but got %q", entity.Kind())
 		}
-		elementRefStruct, ok := element.(ReflectStruct)
-		if !ok {
-			return Query{}, errors.Errorf("expected slice T to be struct")
+	}
+
+	query.executePlan = func(tx *sql.Tx, stmt string, args []interface{}) error {
+		return query.sliceStructScan(tx, stmt, args, refSlice)
+	}
+
+	return query, nil
+}
+
+func (q *Querier) reflectValues(values ...interface{}) ([]ReflectInfo, error) {
+	entities := make([]ReflectInfo, len(values))
+	for i, value := range values {
+		var err error
+
+		if entities[i], err = q.reflect.Reflect(value); err != nil {
+			return nil, errors.Trace(err)
 		}
 
-		query.executePlan = func(tx *sql.Tx, stmt string, args []interface{}) error {
-			return query.sliceStructScan(tx, stmt, args, refValue, elementRefStruct)
+		// Ensure that all the types are the same. This is a current
+		// restriction to reduce complications later on. Given enough time and
+		// energy we can implement this at a later date.
+		if i > 1 && entities[i-1].Kind() != entities[i].Kind() {
+			return nil, errors.Errorf("expected all input values to be of the same kind %q, got %q", entities[i-1].Kind(), entities[i].Kind())
 		}
-	default:
-		return Query{}, errors.Errorf("expected slice but got %q", entity.Kind())
 	}
-	return query, nil
+	return entities, nil
 }
 
 // Copy returns a new Querier with a new hook and statement cache, but keeping
@@ -156,6 +185,7 @@ type Query struct {
 	hook        Hook
 	executePlan func(*sql.Tx, string, []interface{}) error
 	stmtCache   *statementCache
+	reflect     *ReflectCache
 }
 
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
@@ -323,8 +353,12 @@ func (q Query) structScan(tx *sql.Tx, stmt string, args []interface{}, entities 
 	return nil
 }
 
-func (q Query) sliceStructScan(tx *sql.Tx, stmt string, args []interface{}, slice ReflectValue, element ReflectStruct) error {
-	compiledStmt, fields, err := q.compileStatement(stmt, []ReflectStruct{element})
+func (q Query) sliceStructScan(tx *sql.Tx, stmt string, args []interface{}, slice []reflectSlice) error {
+	elements := make([]ReflectStruct, len(slice))
+	for i, ref := range slice {
+		elements[i] = ref.element
+	}
+	compiledStmt, fields, err := q.compileStatement(stmt, elements)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -336,9 +370,21 @@ func (q Query) sliceStructScan(tx *sql.Tx, stmt string, args []interface{}, slic
 	defer rows.Close()
 
 	for rows.Next() {
-		refStruct := element
+		refStructs := make([]ReflectStruct, len(elements))
+		for i, element := range elements {
+			base := reflect.New(element.Value.Type())
+			refInfo, err := q.reflect.Reflect(base.Interface())
+			if err != nil {
+				return errors.Trace(err)
+			}
+			refStruct, ok := refInfo.(ReflectStruct)
+			if !ok {
+				return errors.Errorf("expected struct found %q", refInfo.Kind())
+			}
+			refStructs[i] = refStruct
+		}
 
-		columnar, err := q.structMapping(columns, []ReflectStruct{refStruct}, fields)
+		columnar, err := q.structMapping(columns, elements, fields)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -347,7 +393,10 @@ func (q Query) sliceStructScan(tx *sql.Tx, stmt string, args []interface{}, slic
 			return errors.Trace(err)
 		}
 
-		slice.Value.Set(reflect.Append(slice.Value, refStruct.Value))
+		for k, refSlice := range slice {
+			sliceVal := refSlice.slice.Value
+			sliceVal.Set(reflect.Append(sliceVal, elements[k].Value))
+		}
 	}
 	return errors.Trace(rows.Err())
 }

@@ -468,7 +468,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 		getter, err := querier.ForOne(&person, &location)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;`, struct {
+		return getter.Query(tx, `SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name;`, struct {
 			Name       string `db:"name"`
 			LocationID int    `db:"loc_id"`
 		}{
@@ -479,7 +479,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
 	assertEquals(t, location, Location{City: "london"})
 
-	expected := "SELECT people.age, people.name, location.city FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;"
+	expected := "SELECT people.age, people.name, location.city FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name;"
 	assertEquals(t, processedStmt, expected)
 }
 
@@ -525,6 +525,63 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	})
 
 	expected := "SELECT test.age, test.name FROM test WHERE test.age>:age;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestQueryWithSliceMultipleItems(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE people(
+	name     TEXT,
+	age      INTEGER,
+	location INTEGER
+);
+CREATE TABLE location(
+	id   INTEGER,
+	city TEXT
+);
+INSERT INTO people(name, age, location) values ("fred", 21, 1), ("frank", 42, 2), ("jane", 23, 1);
+INSERT INTO location(id, city) values (1, "london"), (2, "paris");
+	`)
+	assertNil(t, err)
+
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+	type Location struct {
+		City string `db:"city"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var persons []Person
+	var locations []Location
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForMany(&persons, &locations)
+		assertNil(t, err)
+
+		return getter.Query(tx, `SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location ON people.location=location.id WHERE location=:loc_id AND people.age>:age;`, struct {
+			Age        int `db:"age"`
+			LocationID int `db:"loc_id"`
+		}{
+			Age:        20,
+			LocationID: 1,
+		})
+	})
+	assertNil(t, err)
+	assertEquals(t, persons, []Person{
+		{Name: "fred", Age: 21},
+		{Name: "jane", Age: 23},
+	})
+
+	expected := "SELECT people.age, people.name, location.city FROM people INNER JOIN location ON people.location=location.id WHERE location=:loc_id AND people.age>:age;"
 	assertEquals(t, processedStmt, expected)
 }
 
