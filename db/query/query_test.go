@@ -19,7 +19,7 @@ func TestParseNames(t *testing.T) {
 }
 
 func TestConstructNamedArgsWithMap(t *testing.T) {
-	namedArgs, err := constructNamedArgs(map[string]interface{}{
+	namedArgs, err := constructInputNamedArgs(map[string]interface{}{
 		"name": "meshuggah",
 		"age":  42,
 	}, []nameBinding{
@@ -33,7 +33,7 @@ func TestConstructNamedArgsWithMap(t *testing.T) {
 	})
 }
 
-func TestConstructNamedArgsWithStruct(t *testing.T) {
+func TestConstructInputNamedArgsWithStruct(t *testing.T) {
 	arg := struct {
 		Name string `db:"name"`
 		Age  int    `db:"age"`
@@ -41,7 +41,7 @@ func TestConstructNamedArgsWithStruct(t *testing.T) {
 		Name: "meshuggah",
 		Age:  42,
 	}
-	namedArgs, err := constructNamedArgs(arg, []nameBinding{
+	namedArgs, err := constructInputNamedArgs(arg, []nameBinding{
 		{':', "name"},
 		{'@', "age"},
 	})
@@ -50,6 +50,110 @@ func TestConstructNamedArgsWithStruct(t *testing.T) {
 		{Name: "name", Value: "meshuggah"},
 		{Name: "age", Value: 42},
 	})
+}
+
+func TestExecWithMap(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+	`)
+	assertNil(t, err)
+
+	var processedStmts []string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmts = append(processedStmts, stmt)
+	})
+
+	runTx(t, db, func(tx *sql.Tx) error {
+		_, err := querier.Exec(tx, "INSERT INTO test(name, age) VALUES (:name, :age);", map[string]interface{}{
+			"name": "fred",
+			"age":  21,
+		})
+		return err
+	})
+
+	person := make(map[string]interface{})
+
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, "SELECT name, age FROM test WHERE name=:name;", map[string]interface{}{
+			"name": "fred",
+		})
+	})
+
+	assertEquals(t, person, map[string]interface{}{
+		"name": "fred",
+		"age":  int64(21),
+	})
+
+	expected := []string{
+		"INSERT INTO test(name, age) VALUES (:name, :age);",
+		"SELECT name, age FROM test WHERE name=:name;",
+	}
+	assertEquals(t, processedStmts, expected)
+}
+
+func TestExecWithStruct(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+	`)
+	assertNil(t, err)
+
+	var processedStmts []string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmts = append(processedStmts, stmt)
+	})
+
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	runTx(t, db, func(tx *sql.Tx) error {
+		person := Person{
+			Name: "fred",
+			Age:  21,
+		}
+		_, err := querier.Exec(tx, "INSERT INTO test(name, age) VALUES (:name, :age);", person)
+		return err
+	})
+
+	var person Person
+
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, "SELECT name, age FROM test WHERE name=:name;", map[string]interface{}{
+			"name": "fred",
+		})
+	})
+
+	assertEquals(t, person, Person{
+		Name: "fred",
+		Age:  21,
+	})
+
+	expected := []string{
+		"INSERT INTO test(name, age) VALUES (:name, :age);",
+		"SELECT name, age FROM test WHERE name=:name;",
+	}
+	assertEquals(t, processedStmts, expected)
 }
 
 func TestQueryWithMap(t *testing.T) {

@@ -151,6 +151,19 @@ func (q *Querier) ForMany(values ...interface{}) (Query, error) {
 	return query, nil
 }
 
+func (q *Querier) Exec(tx *sql.Tx, stmt string, args ...interface{}) (sql.Result, error) {
+	namedArgs, err := constructNamedArguments(stmt, args)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	if q.hook != nil {
+		q.hook(stmt)
+	}
+
+	return tx.Exec(stmt, namedArgs...)
+}
+
 func (q *Querier) reflectValues(values ...interface{}) ([]ReflectInfo, error) {
 	entities := make([]ReflectInfo, len(values))
 	for i, value := range values {
@@ -189,36 +202,11 @@ type Query struct {
 }
 
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
-	var names []nameBinding
-	if offset := indexOfNamedArgs(stmt); offset >= 0 {
-		var err error
-		if names, err = parseNames(stmt, offset); err != nil {
-			return errors.Trace(err)
-		}
+	namedArgs, err := constructNamedArguments(stmt, args)
+	if err != nil {
+		return errors.Trace(err)
 	}
-
-	// Ensure we have arguments if we have names.
-	if len(args) == 0 && len(names) > 0 {
-		return errors.Errorf("expected arguments for named parameters")
-	}
-
-	var inputs []sql.NamedArg
-	if len(names) > 0 && len(args) >= 1 {
-		// Select the first argument and check if it's a map or struct.
-		var err error
-		if inputs, err = constructNamedArgs(args[0], names); err != nil {
-			return errors.Trace(err)
-		}
-		// Drop the first argument, as that's used for named arguments.
-		args = args[1:]
-	}
-
-	// Put the named arguments at the end of the query.
-	for _, input := range inputs {
-		args = append(args, input)
-	}
-
-	return q.executePlan(tx, stmt, args)
+	return q.executePlan(tx, stmt, namedArgs)
 }
 
 func (q Query) defaultScan(tx *sql.Tx, stmt string, args []interface{}) error {
@@ -504,10 +492,10 @@ var prefixes = map[rune]bindCharPredicate{
 	'?': numeric,
 }
 
-// indexOfNamedArgs returns the potential starting index of a named argument
+// indexOfInputNamedArgs returns the potential starting index of a named argument
 // within the statement contains the named args prefix.
 // This can return a false positives.
-func indexOfNamedArgs(stmt string) int {
+func indexOfInputNamedArgs(stmt string) int {
 	// Let's be explicit that we've found something, we could just use the
 	// res to see if it's moved, but that's more cryptic.
 	var found bool
@@ -582,7 +570,7 @@ func parseNames(stmt string, offset int) ([]nameBinding, error) {
 				// We're done processing the stmt.
 				break
 			}
-			index := indexOfNamedArgs(stmt[i:])
+			index := indexOfInputNamedArgs(stmt[i:])
 			if index == -1 {
 				// No additional names, skip.
 				break
@@ -599,10 +587,10 @@ func parseNames(stmt string, offset int) ([]nameBinding, error) {
 }
 
 func isNameTerminator(a rune) bool {
-	return unicode.IsSpace(a) || a == ',' || a == ';' || a == '='
+	return unicode.IsSpace(a) || a == ',' || a == ';' || a == '=' || a == ')'
 }
 
-func constructNamedArgs(arg interface{}, names []nameBinding) ([]sql.NamedArg, error) {
+func constructInputNamedArgs(arg interface{}, names []nameBinding) ([]sql.NamedArg, error) {
 	t := reflect.TypeOf(arg)
 	k := t.Kind()
 	switch {
@@ -647,6 +635,41 @@ func constructNamedArgs(arg interface{}, names []nameBinding) ([]sql.NamedArg, e
 
 		return nameValues, nil
 	}
+}
+
+func constructNamedArguments(stmt string, args []interface{}) ([]interface{}, error) {
+	var names []nameBinding
+	if offset := indexOfInputNamedArgs(stmt); offset >= 0 {
+		var err error
+		if names, err = parseNames(stmt, offset); err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+
+	// Ensure we have arguments if we have names.
+	if len(args) == 0 && len(names) > 0 {
+		return nil, errors.Errorf("expected arguments for named parameters")
+	}
+
+	var inputs []sql.NamedArg
+	if len(names) > 0 && len(args) >= 1 {
+		// TODO: We may have colliding sql.NamedArgs already sent in, if that's
+		// the case we should document whom wins.
+
+		// Select the first argument and check if it's a map or struct.
+		var err error
+		if inputs, err = constructInputNamedArgs(args[0], names); err != nil {
+			return nil, errors.Trace(err)
+		}
+		// Drop the first argument, as that's used for named arguments.
+		args = args[1:]
+	}
+
+	// Put the named arguments at the end of the query.
+	for _, input := range inputs {
+		args = append(args, input)
+	}
+	return args, nil
 }
 
 // convertMapStringInterface attempts to convert v to map[string]interface{}.
