@@ -38,13 +38,17 @@ func NewQuerier() *Querier {
 }
 
 // Hook assigns the hook to the querier. Each hook call precedes the actual
-// query.
+// query and outputs the compiled statement that's actually used in a query or
+// exec.
+//
 func (q *Querier) Hook(hook Hook) {
 	q.hook = hook
 }
 
-// ForOne creates a query for a set of given types.
-// It should be noted that the select can be cached and the query can be called
+// ForOne creates a query for a set of given types. The values will be populated
+// from the SQL query once executed.
+//
+// It should be noted that the query can be cached and the query can be called
 // multiple times.
 func (q *Querier) ForOne(values ...interface{}) (Query, error) {
 	entities, err := q.reflectValues(values...)
@@ -94,8 +98,10 @@ type reflectSlice struct {
 	element ReflectStruct
 }
 
-// ForMany creates a query based on the slice input.
-// It should be noted that the select can be cached and the query can be called
+// ForMany creates a query based on the slice input. The values will be
+// populated from the SQL query once executed.
+//
+// It should be noted that the query can be cached and the query can be called
 // multiple times.
 func (q *Querier) ForMany(values ...interface{}) (Query, error) {
 	if len(values) == 0 {
@@ -151,6 +157,8 @@ func (q *Querier) ForMany(values ...interface{}) (Query, error) {
 	return query, nil
 }
 
+// Exec executes a query that doesn't return rows. Named arguments can be
+// used within the statement.
 func (q *Querier) Exec(tx *sql.Tx, stmt string, args ...interface{}) (sql.Result, error) {
 	namedArgs, err := constructNamedArguments(stmt, args)
 	if err != nil {
@@ -201,6 +209,70 @@ type Query struct {
 	reflect     *ReflectCache
 }
 
+// Query executes a query that returns rows. Query will attempt to parse the
+// statement for Records or NamedArguments
+//
+// Records
+//
+// Records are a way to represent the fields of a type without having to
+// manually write them out or resorting to the wildcard *, which can be
+// classified as an anti-pattern. The type found within the expression matches
+// the fields and a warning is thrown if there are fields that are found not
+// valid.
+//
+// Record expressions can be written in the following ways, where Person
+// represents a struct type and must have field tags to express the intention.
+//
+//  type Person struct {
+//  	Name string `db:"name"`
+//  	Age  int    `db:"age"`
+//  }
+//
+// In the simplist form, a record will be the name of the type "Person" in this
+// example, surrounded by matching curly brackets: "{Person}". The type name is
+// case sensitive, but space around the brackets isn't.
+// The following expression will not prefix any fields with any additional
+// information. The usage of this expression is for non-joining statements
+// (simple "select from" query).
+//
+//  SELECT {Person} FROM people;
+//
+// Expands to become:
+//
+//  SELECT name, age FROM people;
+//
+// For more complex join examples where multiple types are to be expressed
+// inside the statement, then a prefix can be added to help with that case.
+//
+//  type Location struct {
+//  	City string `db:"city"`
+//  }
+//
+//  SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location WHERE location.id=:loc_id AND people.name=:name;
+//
+// Expands to become:
+//
+//  SELECT people.age, people.name, location.city FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name
+//
+// Named Arguments
+//
+// Named arguments allow the expressing of fields via the name, rather than
+// by a arbitrary number of placeholders (?). This helps ensure that the
+// mistakes on matching values of a query to the arguments are less problematic.
+//
+// Named arguments can have a prefix of ":", "@" or "$" with alpha numeric
+// characters there after, but "?" must only container numeric characters
+// succeeding it.
+//
+// The arguments passed into a query can either be a map[string]interface{} or
+// a type with fields tagged with the db: prefix.
+//
+//  querier.Query(tx, "SELECT {Person} FROM people WHERE name=:name;", map[string]interface{}{
+//  	"name": "fred",
+//  }
+//
+// See https://www.sqlite.org/c3ref/bind_blob.html for more information on
+// named arguments in SQLite.
 func (q Query) Query(tx *sql.Tx, stmt string, args ...interface{}) error {
 	namedArgs, err := constructNamedArguments(stmt, args)
 	if err != nil {
