@@ -2,6 +2,7 @@ package query
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -726,48 +727,66 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 }
 
 func TestParseRecords(t *testing.T) {
-	stmt := `SELECT {test INTO Person}, {'foo' INTO Foo}, {"other" INTO Other}, {Another} FROM test WHERE test.name=:name;`
+	stmt := `SELECT {test.*, test.name, test.age INTO Person} FROM test WHERE test.name=:name;`
 	bindings, err := parseRecords(stmt, indexOfRecordArgs(stmt))
 	assertNil(t, err)
 	assertEquals(t, bindings, []recordBinding{{
 		name:   "Person",
 		prefix: "test",
+		fields: []string{"*", "name", "age"},
 		start:  7,
-		end:    25,
+		end:    48,
+	}})
+}
+
+func TestParseMultipleRecords(t *testing.T) {
+	stmt := `SELECT {test.*, test.name, test.age INTO Person}, {'foo.*' INTO Foo}, {"other.*" INTO Other}, {Another} FROM test WHERE test.name=:name;`
+	bindings, err := parseRecords(stmt, indexOfRecordArgs(stmt))
+	assertNil(t, err)
+	fmt.Println(bindings)
+	assertEquals(t, bindings, []recordBinding{{
+		name:   "Person",
+		prefix: "test",
+		fields: []string{"*", "name", "age"},
+		start:  7,
+		end:    48,
 	}, {
 		name:   "Foo",
 		prefix: "foo",
-		start:  27,
-		end:    43,
+		fields: []string{"*"},
+		start:  50,
+		end:    68,
 	}, {
 		name:   "Other",
 		prefix: "other",
-		start:  45,
-		end:    65,
+		fields: []string{"*"},
+		start:  70,
+		end:    92,
 	}, {
 		name:   "Another",
 		prefix: "",
-		start:  67,
-		end:    76,
+		fields: []string(nil),
+		start:  94,
+		end:    103,
 	}})
 }
 
 func TestParseRecordsErrorsMissingINTO(t *testing.T) {
 	stmt := `SELECT {test Person} FROM test WHERE test.name=:name;`
 	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
-	assertEquals(t, err.Error(), `unexpected record statement "test Person"`)
+	assertEquals(t, err.Error(), `unexpected record expression "test Person"`)
 }
 
 func TestParseRecordsErrorsMissingMatchingQuote(t *testing.T) {
 	stmt := `SELECT {'test INTO Person} FROM test WHERE test.name=:name;`
 	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
-	assertEquals(t, err.Error(), `missing quote "'" terminator for record statement "test INTO Person"`)
+	assertEquals(t, err.Error(), `missing quote "'" terminator for record expression "test INTO Person"`)
 }
 
 func TestParseRecordsErrorsTooMuchInformation(t *testing.T) {
 	stmt := `SELECT {test INTO Person AS} FROM test WHERE test.name=:name;`
 	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
-	assertEquals(t, err.Error(), `unexpected record statement "test INTO Person AS"`)
+	assertEquals(t, err.Error(), `unexpected record expression "test INTO Person AS"`)
 }
 
 func TestExpandFields(t *testing.T) {

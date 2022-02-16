@@ -766,6 +766,7 @@ func indexOfRecordArgs(stmt string) int {
 type recordBinding struct {
 	name       string
 	prefix     string
+	fields     []string
 	start, end int
 }
 
@@ -774,6 +775,9 @@ func (f recordBinding) translate(expantion int) int {
 }
 
 func parseRecords(stmt string, offset int) ([]recordBinding, error) {
+	// TODO: Create a tokenizer and AST for a record bindings. For now we'll
+	// just walk over them in a handrolled style, until the need arises.
+
 	var records []recordBinding
 	for i := offset; i < len(stmt); i++ {
 		r := rune(stmt[i])
@@ -781,7 +785,8 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 			return records, nil
 		}
 
-		// Parse the Record syntax `{Record}` or optionally `{test INTO Record}`
+		// Parse the Record syntax `{Record}` or optionally `{test.* INTO Record}`
+		// We can consider this being the tokenizer.
 		var record string
 		quotes := make(map[rune]int)
 	inner:
@@ -789,9 +794,9 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 			char := rune(stmt[i])
 
 			switch {
-			case unicode.IsLetter(char) || unicode.IsSpace(char):
+			case unicode.IsLetter(char) || unicode.IsSpace(char) || unicode.IsNumber(char) || unicode.IsDigit(char):
 				fallthrough
-			case char == '_':
+			case char == '_', char == ',', char == '.', char == '*':
 				record += string(char)
 			case char == '"' || char == '\'':
 				quotes[char]++
@@ -800,31 +805,51 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 				break inner
 
 			default:
-				return nil, errors.Errorf("unexpected struct name in statement")
+				return nil, errors.Errorf("unexpected struct name at %d in record expression %q", i-offset, stmt[offset+1:i+1])
 			}
 		}
 
+		// The following parses the fields, so that we know what to fill in the
+		// record.
+		// This is more akin to a parser, over a series of runes in a string.
+		var fields []string
 		var name, prefix string
 		parts := strings.Split(strings.TrimSpace(record), " ")
 		if num := len(parts); num == 1 {
 			name = parts[0]
-		} else if num == 3 && strings.ToLower(parts[1]) == "into" {
-			prefix = parts[0]
-			name = parts[2]
+		} else if num > 1 && strings.ToLower(parts[num-2]) == "into" {
+			name = parts[num-1]
+			// Some limitations, all prefixes have to match.
+			for _, part := range parts[:num-2] {
+				// We want to normalize all the fields in a record. We do this
+				// by removing any white space.
+				field := strings.TrimSuffix(strings.TrimSpace(part), ",")
+				// We always expect 2 values.
+				fieldParts := strings.Split(field, ".")
+				if len(fieldParts) != 2 {
+					return nil, errors.Errorf("unexpected field %q in record expression %q", field, record)
+				}
+				if len(fields) != 0 && prefix != fieldParts[0] {
+					return nil, errors.Errorf("unexpected table name %q in field %q for record expression %q", fieldParts[0], field, record)
+				}
+				prefix = fieldParts[0]
+				fields = append(fields, strings.TrimSpace(fieldParts[1]))
+			}
 		} else {
-			return nil, errors.Errorf("unexpected record statement %q", record)
+			return nil, errors.Errorf("unexpected record expression %q", record)
 		}
 
 		// This is a very basic algorithm.
 		for char, amount := range quotes {
 			if amount%2 != 0 {
-				return nil, errors.Errorf("missing quote %q terminator for record statement %q", string(char), record)
+				return nil, errors.Errorf("missing quote %q terminator for record expression %q", string(char), record)
 			}
 		}
 
 		records = append(records, recordBinding{
 			name:   strings.TrimSpace(name),
 			prefix: prefix,
+			fields: fields,
 			start:  offset,
 			end:    i + 1,
 		})
