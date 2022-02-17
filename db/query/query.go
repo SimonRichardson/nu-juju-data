@@ -766,7 +766,8 @@ func indexOfRecordArgs(stmt string) int {
 type recordBinding struct {
 	name       string
 	prefix     string
-	fields     []string
+	fields     map[string]struct{}
+	wildcard   bool
 	start, end int
 }
 
@@ -799,8 +800,20 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 			case char == '_', char == ',', char == '.', char == '*':
 				record += string(char)
 			case char == '"' || char == '\'':
-				quotes[char]++
-				continue
+				if quotes[char] == 0 {
+					quotes[char]++
+					continue
+				}
+
+				// peek forward.
+				if i+1 < len(stmt) {
+					peek := rune(stmt[i+1])
+					if unicode.IsSpace(peek) || peek == '.' {
+						quotes[char]++
+						continue
+					}
+				}
+				return nil, errors.Errorf("unexpected quoted string at %d in record expression %q", i-offset, stmt[offset+1:i+1])
 			case char == '}':
 				break inner
 
@@ -812,11 +825,16 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 		// The following parses the fields, so that we know what to fill in the
 		// record.
 		// This is more akin to a parser, over a series of runes in a string.
-		var fields []string
-		var name, prefix string
+		var (
+			fields       = make(map[string]struct{})
+			wildcard     bool
+			name, prefix string
+		)
+
 		parts := strings.Split(strings.TrimSpace(record), " ")
 		if num := len(parts); num == 1 {
 			name = parts[0]
+			wildcard = true
 		} else if num > 1 && strings.ToLower(parts[num-2]) == "into" {
 			name = parts[num-1]
 			// Some limitations, all prefixes have to match.
@@ -833,7 +851,12 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 					return nil, errors.Errorf("unexpected table name %q in field %q for record expression %q", fieldParts[0], field, record)
 				}
 				prefix = fieldParts[0]
-				fields = append(fields, strings.TrimSpace(fieldParts[1]))
+
+				fieldValue := strings.TrimSpace(fieldParts[1])
+				if fieldValue == "*" {
+					wildcard = true
+				}
+				fields[fieldValue] = struct{}{}
 			}
 		} else {
 			return nil, errors.Errorf("unexpected record expression %q", record)
@@ -847,11 +870,12 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 		}
 
 		records = append(records, recordBinding{
-			name:   strings.TrimSpace(name),
-			prefix: prefix,
-			fields: fields,
-			start:  offset,
-			end:    i + 1,
+			name:     strings.TrimSpace(name),
+			prefix:   prefix,
+			fields:   fields,
+			wildcard: wildcard,
+			start:    offset,
+			end:      i + 1,
 		})
 
 		if i >= len(stmt) {
@@ -885,18 +909,25 @@ func expandRecords(stmt string, records []recordBinding, entities []ReflectStruc
 			// pre-computed.
 			entityInter := intersections[entity.Name]
 
-			// We've located the entity, now swap out all of it's record names.
-			names := make([]string, 0, len(entity.Fields))
-			for name := range entity.Fields {
-				if record.prefix == "" {
-					names = append(names, name)
-					continue
+			var names []string
+			if record.wildcard {
+				// If we're wildcarded, just grab all the names.
+				for name := range entity.Fields {
+					names = append(names, constructFieldNameAlias(name, record, entityInter))
 				}
-				var alias string
-				if _, ok := entityInter[name]; ok {
-					alias = " AS " + AliasPrefix + record.prefix + AliasSeparator + name
+			} else {
+				// If we're not wildcarded, go through all the binding fields
+				// and locate the entity field for the Record.
+				for name := range record.fields {
+					if _, ok := entity.Fields[name]; !ok {
+						return "", errors.Errorf("field %q not found in entity %q", name, entity.Name)
+					}
+					names = append(names, constructFieldNameAlias(name, record, entityInter))
 				}
-				names = append(names, record.prefix+"."+name+alias)
+			}
+
+			if len(names) == 0 {
+				return "", errors.Errorf("no fields found in record %q expression", entity.Name)
 			}
 			sort.Strings(names)
 			recordList := strings.Join(names, ", ")
@@ -915,6 +946,17 @@ func expandRecords(stmt string, records []recordBinding, entities []ReflectStruc
 	}
 
 	return stmt, nil
+}
+
+func constructFieldNameAlias(name string, record recordBinding, intersection map[string]struct{}) string {
+	if record.prefix == "" {
+		return name
+	}
+	var alias string
+	if _, ok := intersection[name]; ok {
+		alias = " AS " + AliasPrefix + record.prefix + AliasSeparator + name
+	}
+	return record.prefix + "." + name + alias
 }
 
 func fieldIntersections(entities []ReflectStruct) map[string]map[string]struct{} {

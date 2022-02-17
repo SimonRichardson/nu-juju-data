@@ -2,7 +2,6 @@ package query
 
 import (
 	"database/sql"
-	"fmt"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -299,10 +298,88 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		getter, err := querier.ForOne(&person)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, struct {
-			Name string `db:"name"`
-		}{
-			Name: "fred",
+		return getter.Query(tx, `SELECT {test.name, test.age INTO Person} FROM test WHERE test.name=:name;`, map[string]interface{}{
+			"name": "fred",
+		})
+	})
+
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+
+	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestPartialNameQueryWithStruct(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, `SELECT {test.name INTO Person} FROM test WHERE test.name=:name;`, map[string]interface{}{
+			"name": "fred",
+		})
+	})
+
+	assertEquals(t, person, Person{Name: "fred", Age: 0})
+
+	expected := "SELECT test.name FROM test WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestWildcardQueryWithStruct(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, `SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`, map[string]interface{}{
+			"name": "fred",
 		})
 	})
 
@@ -347,11 +424,11 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 			Name: "fred",
 		}
 
-		if err := getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, arg); err != nil {
+		if err := getter.Query(tx, `SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`, arg); err != nil {
 			return err
 		}
 
-		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, arg)
+		return getter.Query(tx, `SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`, arg)
 	})
 
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
@@ -359,7 +436,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
 	assertEquals(t, processedStmt, expected)
 
-	_, ok := querier.stmtCache.Get(`SELECT {test INTO Person} FROM test WHERE test.name=:name;`)
+	_, ok := querier.stmtCache.Get(`SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`)
 	assertEquals(t, ok, true)
 }
 
@@ -392,7 +469,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		getter, err := querier.ForOne(&person)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, struct {
+		return getter.Query(tx, `SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`, struct {
 			Name string `db:"name"`
 		}{
 			Name: "fred",
@@ -402,7 +479,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		getter, err := querier.ForOne(&person)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.name=:name;`, struct {
+		return getter.Query(tx, `SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`, struct {
 			Name string `db:"name"`
 		}{
 			Name: "fred",
@@ -414,7 +491,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
 	assertEquals(t, processedStmt, expected)
 
-	_, ok := querier.stmtCache.Get(`SELECT {test INTO Person} FROM test WHERE test.name=:name;`)
+	_, ok := querier.stmtCache.Get(`SELECT {test.* INTO Person} FROM test WHERE test.name=:name;`)
 	assertEquals(t, ok, true)
 }
 
@@ -456,7 +533,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		getter, err := querier.ForOne(&person, &record)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {"test" INTO Person}, {"sqlite_master" INTO Record} FROM test,sqlite_master WHERE test.name=:name;`, arg)
+		return getter.Query(tx, `SELECT {"test.*" INTO Person}, {"sqlite_master.*" INTO Record} FROM test,sqlite_master WHERE test.name=:name;`, arg)
 	})
 
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
@@ -609,7 +686,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 		getter, err := querier.ForOne(&person, &location)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name;`, struct {
+		return getter.Query(tx, `SELECT {people.* INTO Person}, {location.* INTO Location} FROM people INNER JOIN location ON people.location=location.id WHERE location.id=:loc_id AND people.name=:name;`, struct {
 			Name       string `db:"name"`
 			LocationID int    `db:"loc_id"`
 		}{
@@ -653,7 +730,7 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		getter, err := querier.ForMany(&persons)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {test INTO Person} FROM test WHERE test.age>:age;`, struct {
+		return getter.Query(tx, `SELECT {test.* INTO Person} FROM test WHERE test.age>:age;`, struct {
 			Age int `db:"age"`
 		}{
 			Age: 20,
@@ -708,7 +785,7 @@ INSERT INTO location(id, city) values (1, "london"), (2, "paris");
 		getter, err := querier.ForMany(&persons, &locations)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {people INTO Person}, {location INTO Location} FROM people INNER JOIN location ON people.location=location.id WHERE location=:loc_id AND people.age>:age;`, struct {
+		return getter.Query(tx, `SELECT {people.* INTO Person}, {location.* INTO Location} FROM people INNER JOIN location ON people.location=location.id WHERE location=:loc_id AND people.age>:age;`, struct {
 			Age        int `db:"age"`
 			LocationID int `db:"loc_id"`
 		}{
@@ -731,11 +808,12 @@ func TestParseRecords(t *testing.T) {
 	bindings, err := parseRecords(stmt, indexOfRecordArgs(stmt))
 	assertNil(t, err)
 	assertEquals(t, bindings, []recordBinding{{
-		name:   "Person",
-		prefix: "test",
-		fields: []string{"*", "name", "age"},
-		start:  7,
-		end:    48,
+		name:     "Person",
+		prefix:   "test",
+		fields:   map[string]struct{}{"*": {}, "name": {}, "age": {}},
+		wildcard: true,
+		start:    7,
+		end:      48,
 	}})
 }
 
@@ -743,31 +821,34 @@ func TestParseMultipleRecords(t *testing.T) {
 	stmt := `SELECT {test.*, test.name, test.age INTO Person}, {'foo.*' INTO Foo}, {"other.*" INTO Other}, {Another} FROM test WHERE test.name=:name;`
 	bindings, err := parseRecords(stmt, indexOfRecordArgs(stmt))
 	assertNil(t, err)
-	fmt.Println(bindings)
 	assertEquals(t, bindings, []recordBinding{{
-		name:   "Person",
-		prefix: "test",
-		fields: []string{"*", "name", "age"},
-		start:  7,
-		end:    48,
+		name:     "Person",
+		prefix:   "test",
+		fields:   map[string]struct{}{"*": {}, "name": {}, "age": {}},
+		wildcard: true,
+		start:    7,
+		end:      48,
 	}, {
-		name:   "Foo",
-		prefix: "foo",
-		fields: []string{"*"},
-		start:  50,
-		end:    68,
+		name:     "Foo",
+		prefix:   "foo",
+		fields:   map[string]struct{}{"*": {}},
+		wildcard: true,
+		start:    50,
+		end:      68,
 	}, {
-		name:   "Other",
-		prefix: "other",
-		fields: []string{"*"},
-		start:  70,
-		end:    92,
+		name:     "Other",
+		prefix:   "other",
+		fields:   map[string]struct{}{"*": {}},
+		wildcard: true,
+		start:    70,
+		end:      92,
 	}, {
-		name:   "Another",
-		prefix: "",
-		fields: []string(nil),
-		start:  94,
-		end:    103,
+		name:     "Another",
+		prefix:   "",
+		fields:   map[string]struct{}{},
+		wildcard: true,
+		start:    94,
+		end:      103,
 	}})
 }
 
@@ -778,9 +859,9 @@ func TestParseRecordsErrorsMissingINTO(t *testing.T) {
 }
 
 func TestParseRecordsErrorsMissingMatchingQuote(t *testing.T) {
-	stmt := `SELECT {'test INTO Person} FROM test WHERE test.name=:name;`
+	stmt := `SELECT {'test.name INTO Person} FROM test WHERE test.name=:name;`
 	_, err := parseRecords(stmt, indexOfRecordArgs(stmt))
-	assertEquals(t, err.Error(), `missing quote "'" terminator for record expression "test INTO Person"`)
+	assertEquals(t, err.Error(), `missing quote "'" terminator for record expression "test.name INTO Person"`)
 }
 
 func TestParseRecordsErrorsTooMuchInformation(t *testing.T) {
@@ -790,21 +871,28 @@ func TestParseRecordsErrorsTooMuchInformation(t *testing.T) {
 }
 
 func TestExpandFields(t *testing.T) {
-	stmt := `SELECT {Person}, {Other}, {Another} FROM test WHERE test.name=:name;`
+	stmt := `SELECT {test.* INTO Person}, {x INTO Other}, {y INTO Another} FROM test WHERE test.name=:name;`
 
 	fields := []recordBinding{{
-		name:   "Person",
-		start:  7,
-		end:    15,
-		prefix: "test",
+		name:     "Person",
+		wildcard: true,
+		start:    7,
+		end:      27,
+		prefix:   "test",
 	}, {
-		name:  "Other",
-		start: 17,
-		end:   24,
+		name: "Other",
+		fields: map[string]struct{}{
+			"x": {},
+		},
+		start: 29,
+		end:   43,
 	}, {
-		name:  "Another",
-		start: 26,
-		end:   35,
+		name: "Another",
+		fields: map[string]struct{}{
+			"y": {},
+		},
+		start: 45,
+		end:   61,
 	}}
 
 	entities := []ReflectStruct{{
@@ -835,6 +923,6 @@ func TestExpandFields(t *testing.T) {
 	res, err := expandRecords(stmt, fields, entities, intersections)
 	assertNil(t, err)
 
-	expected := "SELECT test.age, test.name AS _pfx_test_sfx_name, x, y, z FROM test WHERE test.name=:name;"
+	expected := "SELECT test.age, test.name AS _pfx_test_sfx_name, x, y FROM test WHERE test.name=:name;"
 	assertEquals(t, res, expected)
 }
