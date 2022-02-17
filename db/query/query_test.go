@@ -298,14 +298,54 @@ INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
 		getter, err := querier.ForOne(&person)
 		assertNil(t, err)
 
-		return getter.Query(tx, `SELECT {test.name, test.age INTO Person} FROM test WHERE test.name=:name;`, map[string]interface{}{
+		person.Name = "fred"
+
+		return getter.Query(tx, `SELECT {test.name, test.age INTO Person} FROM test WHERE test.name=:name;`, person)
+	})
+
+	assertEquals(t, person, Person{Name: "fred", Age: 21})
+
+	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
+	assertEquals(t, processedStmt, expected)
+}
+
+func TestNoPrefixQueryWithStruct(t *testing.T) {
+	db := setupDB(t)
+
+	_, err := db.Exec(`
+CREATE TABLE test(
+	name TEXT,
+	age  INTEGER
+);
+INSERT INTO test(name, age) values ("fred", 21), ("frank", 42);
+	`)
+	assertNil(t, err)
+
+	type Person struct {
+		Name string `db:"name"`
+		Age  int    `db:"age"`
+	}
+
+	var processedStmt string
+
+	querier := NewQuerier()
+	querier.Hook(func(stmt string) {
+		processedStmt = stmt
+	})
+
+	var person Person
+	runTx(t, db, func(tx *sql.Tx) error {
+		getter, err := querier.ForOne(&person)
+		assertNil(t, err)
+
+		return getter.Query(tx, `SELECT {name, age INTO Person} FROM test WHERE test.name=:name;`, map[string]interface{}{
 			"name": "fred",
 		})
 	})
 
 	assertEquals(t, person, Person{Name: "fred", Age: 21})
 
-	expected := "SELECT test.age, test.name FROM test WHERE test.name=:name;"
+	expected := "SELECT age, name FROM test WHERE test.name=:name;"
 	assertEquals(t, processedStmt, expected)
 }
 

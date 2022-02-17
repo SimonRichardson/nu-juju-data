@@ -844,8 +844,12 @@ func parseRecords(stmt string, offset int) ([]recordBinding, error) {
 				field := strings.TrimSuffix(strings.TrimSpace(part), ",")
 				// We always expect 2 values.
 				fieldParts := strings.Split(field, ".")
-				if len(fieldParts) != 2 {
+				if num := len(fieldParts); num == 0 || num > 2 {
 					return nil, errors.Errorf("unexpected field %q in record expression %q", field, record)
+				} else if num == 1 {
+					// Ensure we always have two field parts, as that will make
+					// the logic below a lot simpler.
+					fieldParts = []string{"", fieldParts[0]}
 				}
 				if len(fields) != 0 && prefix != fieldParts[0] {
 					return nil, errors.Errorf("unexpected table name %q in field %q for record expression %q", fieldParts[0], field, record)
